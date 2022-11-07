@@ -1,0 +1,1206 @@
+type: edu
+files:
+- name: build.gradle
+  visible: true
+  text: |-
+    plugins {
+        id 'java'
+        id 'org.springframework.boot' version '2.3.1.RELEASE'
+        id 'io.spring.dependency-management' version '1.0.9.RELEASE'
+    }
+
+    repositories {
+        mavenCentral()
+    }
+
+    sourceSets.main.resources.srcDirs = ["src/resources"]
+
+    dependencies {
+        implementation 'org.springframework.boot:spring-boot-starter'
+        implementation 'org.springframework.boot:spring-boot-starter-actuator'
+        implementation 'org.springframework.boot:spring-boot-starter-web'
+        implementation group: 'org.hibernate', name: 'hibernate-validator', version: '6.1.0.Final'
+        implementation group: 'org.springframework.security', name: 'spring-security-config', version: '5.7.3'
+        implementation group: 'org.springframework.security', name: 'spring-security-web', version: '5.7.3'
+        implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+        implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+        implementation group: 'com.fasterxml.jackson.datatype', name: 'jackson-datatype-jsr310', version: '2.13.3'
+        implementation 'org.projectlombok:lombok:1.18.24'
+        runtimeOnly 'com.h2database:h2'
+        testImplementation('org.springframework.boot:spring-boot-starter-test') {
+            exclude group: 'org.junit.vintage', module: 'junit-vintage-engine'
+        }
+
+
+    }
+  learner_created: false
+- name: src/account/AccountServiceApplication.java
+  visible: true
+  text: |-
+    package account;
+
+    import org.springframework.boot.SpringApplication;
+    import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+    @SpringBootApplication
+    public class AccountServiceApplication {
+
+        public static void main(String[] args) {
+            SpringApplication.run(AccountServiceApplication.class, args);
+        }
+
+    }
+  learner_created: false
+- name: src/resources/application.properties
+  visible: true
+  text: |
+    server.port=28852
+    management.endpoints.web.exposure.include=*
+    management.endpoint.shutdown.enabled=true
+    spring.jackson.serialization.INDENT_OUTPUT=true
+    #datasource settings
+    spring.datasource.url=jdbc:h2:file:~/acc11
+    spring.datasource.driverClassName=org.h2.Driver
+    spring.datasource.username=sa
+    spring.datasource.password=abc123
+
+    #data settings
+    spring.jpa.database-platform=org.hibernate.dialect.H2Dialect
+    spring.jpa.hibernate.ddl-auto=update
+
+    #console settings
+    spring.h2.console.enabled=true
+    spring.h2.console.path=/h2
+    spring.h2.console.settings.trace=false
+    spring.jpa.show-sql=true
+    server.error.include-message = always
+
+    spring.jackson.date-format=MM/yyyy
+  learner_created: false
+- name: src/resources/static/index.html
+  visible: true
+  text: |-
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Title</title>
+        <h1>Welcome
+        </h1>
+    </head>
+    <body>
+
+    </body>
+    </html>
+  learner_created: false
+- name: src/account/SecurityConfig.java
+  visible: true
+  text: |
+    package account;
+
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.context.annotation.Bean;
+    import org.springframework.context.annotation.Configuration;
+    import org.springframework.http.HttpMethod;
+    import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+    import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
+    import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+    import org.springframework.security.config.annotation.web.builders.WebSecurity;
+    import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+    import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
+    import org.springframework.security.config.http.SessionCreationPolicy;
+    import org.springframework.security.core.userdetails.UserDetailsService;
+    import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+    import org.springframework.security.crypto.factory.PasswordEncoderFactories;
+    import org.springframework.security.crypto.password.PasswordEncoder;
+
+    import javax.sql.DataSource;
+
+    @Configuration
+    @EnableWebSecurity
+    public class SecurityConfig extends WebSecurityConfigurerAdapter {
+
+        @Autowired
+        RestAuthenticationEntryPoint restAuthenticationEntryPoint;
+
+        @Autowired
+        private UserDetailsService userDetailsService;
+
+
+        @Override
+        protected void configure(AuthenticationManagerBuilder auth) throws Exception {
+            auth.authenticationProvider(authenticationProvider());
+        }
+
+        @Override
+        protected void configure(HttpSecurity http) throws Exception {
+            http.authorizeRequests()
+                    .mvcMatchers("/api/acct/payments").anonymous()
+                    .mvcMatchers("/api/empl/payment").authenticated()
+                    .mvcMatchers("/api/auth/changepass").authenticated()
+                    .mvcMatchers("api/admin/user/role").hasRole("ROLE_ADMINISTRATOR")
+                    .anyRequest().permitAll() // make remaining endpoints public (including POST /register)
+                    .and()
+                    .csrf().disable() // disabling CSRF will allow sending POST request using Postman
+                    .httpBasic(); // enables basic auth.
+        }
+
+
+
+            @Bean
+            public BCryptPasswordEncoder passwordEncoder(){
+                return new BCryptPasswordEncoder();
+            }
+
+        @Bean
+        public DaoAuthenticationProvider authenticationProvider(){
+            DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+            provider.setPasswordEncoder(passwordEncoder());
+            provider.setUserDetailsService(userDetailsService);
+            return provider;
+        }
+
+        @Override
+        public void configure(WebSecurity web) throws Exception {
+            web
+                    .ignoring()
+                    .antMatchers("/h2/**");
+        }
+
+
+    }
+  learner_created: false
+- name: src/account/Service/UserService.java
+  visible: true
+  text: |
+    package account.Service;
+
+    import account.Model.BreachedPasswords;
+    import account.Model.Group;
+    import account.Model.User;
+    import account.Repository.GroupRepository;
+    import account.Repository.UserRepository;
+    import account.UserExistException;
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.http.HttpStatus;
+    import org.springframework.security.core.context.SecurityContextHolder;
+    import org.springframework.security.core.userdetails.UserDetails;
+    import org.springframework.security.core.userdetails.UserDetailsService;
+    import org.springframework.security.core.userdetails.UsernameNotFoundException;
+    import org.springframework.security.crypto.password.PasswordEncoder;
+    import org.springframework.stereotype.Service;
+    import org.springframework.web.server.ResponseStatusException;
+
+    import java.security.SecureRandom;
+    import java.util.Arrays;
+    import java.util.List;
+    import java.util.Locale;
+    import java.util.Optional;
+
+    @Service
+    public class UserService implements UserDetailsService {
+
+        @Autowired
+        GroupRepository groupRepository;
+        @Autowired
+        private UserRepository userRepository;
+
+        @Autowired
+        PasswordEncoder encoder;
+
+        @Override
+        public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+            UserDetails user = (UserDetails) userRepository.findByEmailIgnoreCase(username);
+
+            if (user == null){
+                throw new UsernameNotFoundException(username);
+
+            }
+            return user;
+        }
+
+
+        public User save (User user) {
+
+            checkIfUserEmailExist(user.getEmail());
+            checkPasswordLength(user.getPassword());
+            checkIfPasswordSafe(user.getPassword());
+
+            user.setEmail(user.getEmail().toLowerCase(Locale.ROOT));
+            user.setPassword(encoder.encode(user.getPassword()));
+            user.addUserGroups(selectGroupForUser());
+           return userRepository.save(user);
+        }
+
+
+        public void checkIfUserEmailExist(String email) {
+            if (userRepository.existsByEmail(email.toLowerCase(Locale.ROOT))) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "User exist!");
+            }
+        }
+
+        public void checkIfPasswordSafe(String password) {
+
+            BreachedPasswords breachedPasswords = new BreachedPasswords();
+            if (breachedPasswords.ifContainsBreachedPassword(password)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The password is in the hacker's database!");
+
+            }
+        }
+
+        public void checkPasswordLength(String password) {
+            if(password.length() < 12) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The password length must be at least 12 chars!");
+
+            }
+        }
+
+        public String changeUserPassword(String newPassword) {
+
+            User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+            String currentPassword = user.getPassword();
+
+            checkIfPasswordAreDiffrent(newPassword, currentPassword);
+            checkPasswordLength(newPassword);
+            checkIfPasswordSafe(newPassword);
+
+            user.setPassword(encoder.encode(newPassword));
+            userRepository.save(user);
+
+            return "{ \n" +
+                    "\"email\": " + "\"" + user.getEmail() + "\", \n" +
+                    "\"status\": " + "\"" + "The password has been updated successfully" +"\" \n" +
+                    "}";
+        }
+
+        public void checkIfPasswordAreDiffrent(String newPassword, String currentPassword) {
+            if (encoder.matches(newPassword, currentPassword)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The passwords must be different!");
+            }
+        }
+
+        public Group selectGroupForUser() {
+            long numberOfUsers = userRepository.count();
+
+            if (numberOfUsers == 0) {
+                return groupRepository.findGroupByName("ROLE_ADMINISTRATOR");
+            }
+
+            return groupRepository.findGroupByName("ROLE_USER");
+
+        }
+
+        public List<User> getAllUsersList() {
+            return userRepository.findAll();
+        }
+
+
+
+
+
+
+
+    }
+  learner_created: false
+- name: src/account/UserExistException.java
+  visible: true
+  text: |
+    package account;
+
+    import org.springframework.http.HttpStatus;
+    import org.springframework.web.bind.annotation.ResponseStatus;
+
+    @ResponseStatus(code = HttpStatus.BAD_REQUEST, reason = "User not found")
+    public class UserExistException extends RuntimeException {
+    }
+  learner_created: false
+- name: src/account/Repository/UserRepository.java
+  visible: true
+  text: |
+    package account.Repository;
+
+    import account.Model.User;
+    import org.springframework.data.jpa.repository.JpaRepository;
+    import org.springframework.stereotype.Repository;
+
+    import java.util.Optional;
+
+    @Repository
+    public interface UserRepository extends JpaRepository<User, Long> {
+        User findByName(String username);
+        User findByEmailIgnoreCase(String email);
+        boolean existsByEmail(String email);
+
+
+
+    }
+  learner_created: false
+- name: src/EmailExistException.java
+  visible: true
+  text: |
+    import org.springframework.http.HttpStatus;
+    import org.springframework.web.bind.annotation.ResponseStatus;
+
+    @ResponseStatus(code = HttpStatus.INTERNAL_SERVER_ERROR, reason = "Email exisit")
+    public class EmailExistException extends RuntimeException {
+
+        public EmailExistException(String cause) {
+            super(cause);
+            System.out.println("there");
+
+        }
+    }
+  learner_created: false
+- name: src/account/Controller/AccountController.java
+  visible: true
+  text: |
+    package account.Controller;
+
+    import account.Model.Payment;
+    import account.Model.User;
+    import account.Repository.UserRepository;
+    import account.Service.UserService;
+    import com.fasterxml.jackson.core.JsonProcessingException;
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.http.HttpStatus;
+    import org.springframework.http.MediaType;
+    import org.springframework.http.ResponseEntity;
+    import org.springframework.security.core.context.SecurityContextHolder;
+    import org.springframework.security.core.userdetails.UserDetails;
+    import org.springframework.security.crypto.password.PasswordEncoder;
+    import org.springframework.stereotype.Controller;
+    import org.springframework.ui.ModelMap;
+    import org.springframework.web.bind.annotation.*;
+    import org.springframework.web.server.ResponseStatusException;
+
+    import javax.validation.Valid;
+    import javax.validation.constraints.NotNull;
+    import java.io.IOException;
+    import java.util.Arrays;
+    import java.util.List;
+    import java.util.Locale;
+    import java.util.Map;
+
+    @RestController
+    public class AccountController {
+
+        @Autowired
+        UserService userService;
+
+
+        @PostMapping("api/auth/signup")
+        public User signup(@Valid @RequestBody User user) throws IOException {
+
+            return userService.save(user);
+
+        }
+
+
+        @PostMapping("api/auth/changepass")
+        public String changePass(@RequestBody Map<String,String> newPasswordMap) {
+            String newPassword = newPasswordMap.get("new_password");
+
+            return userService.changeUserPassword(newPassword);
+
+        }
+    }
+  learner_created: false
+- name: src/account/Model/User.java
+  visible: true
+  text: |
+    package account.Model;
+
+    import account.Controller.CustomUserSetSerializer;
+    import account.CustomSetSerializer;
+    import com.fasterxml.jackson.annotation.JsonIgnore;
+    import com.fasterxml.jackson.annotation.JsonManagedReference;
+    import com.fasterxml.jackson.annotation.JsonProperty;
+    import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+    import lombok.*;
+
+
+    import javax.persistence.*;
+    import javax.validation.constraints.Email;
+    import javax.validation.constraints.NotBlank;
+    import java.util.HashSet;
+    import java.util.Set;
+
+    @Data
+    @AllArgsConstructor
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    @Entity(name = "Users")
+    public class User {
+
+        @Id
+        @GeneratedValue(strategy = GenerationType.AUTO)
+        private Long id;
+
+        @Column(name = "name")
+        @NotBlank
+        private String name;
+
+        @Column
+        @NotBlank
+        private String password;
+
+        @Column
+        @NotBlank
+        @Email(regexp = ".+@acme\\.com$")
+        private String email;
+
+        @Column
+        @NotBlank
+        private String lastname;
+
+
+        @ManyToMany(cascade = {
+                CascadeType.PERSIST,
+                CascadeType.MERGE
+        })
+
+        @JoinTable(name = "user_groups",
+                joinColumns = @JoinColumn(name = "user_id"),
+                inverseJoinColumns = @JoinColumn(name = "group_id"
+                ))
+        @JsonSerialize(using = CustomSetSerializer.class)
+        private Set<Group> userGroups = new HashSet<>();
+
+
+        public void addUserGroups(Group group) {
+            this.userGroups.add(group);
+        }
+
+    }
+  learner_created: false
+- name: src/account/RestAuthenticationEntryPoint.java
+  visible: true
+  text: |
+    package account;
+
+    import org.springframework.security.core.AuthenticationException;
+    import org.springframework.security.web.AuthenticationEntryPoint;
+    import org.springframework.stereotype.Component;
+
+    import javax.servlet.ServletException;
+    import javax.servlet.http.HttpServletRequest;
+    import javax.servlet.http.HttpServletResponse;
+    import java.io.IOException;
+
+
+    @Component
+    public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
+        @Override
+        public void commence(HttpServletRequest request, HttpServletResponse response, AuthenticationException authException) throws IOException, ServletException {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, authException.getMessage());
+
+        }
+    }
+  learner_created: false
+- name: src/account/Model/Payment.java
+  visible: true
+  text: |
+    package account.Model;
+
+
+    import account.CustomDateDeserializer;
+    import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+    import lombok.*;
+
+
+    import javax.persistence.*;
+    import javax.validation.constraints.NotBlank;
+    import java.util.Calendar;
+    import java.util.Date;
+    import java.util.Locale;
+
+
+    @Data
+    @AllArgsConstructor
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    @Entity
+    @Table(name = "Payments")
+    public class Payment {
+
+        @Id
+        @GeneratedValue(strategy = GenerationType.IDENTITY)
+        private long id;
+
+        @Column(name = "employee")
+        @NotBlank
+        String employee;
+
+        @Column(name ="period")
+        @JsonDeserialize(using = CustomDateDeserializer.class)
+        Date period;
+
+        @Column(name = "salary")
+        Long salary;
+
+        @ManyToOne
+        @JoinColumn(name = "user_id", referencedColumnName = "id", nullable = false)
+        User user;
+
+        @Override
+        public String toString() {
+            return "{ \n " +
+                    "\"name\": " + "\"" + user.getName() + "\", \n" +
+                    "\"lastname\": " + "\"" + user.getLastname() + "\", \n" +
+                    "\"period\": " + "\"" + getDate() + "\", \n" +
+                    "\"salary\": " + "\"" + getSalaryInDollarCentsForm() + "\" \n" +
+                    "}";
+        }
+
+        public String getSalaryInDollarCentsForm() {
+            long dollars = salary/100;
+            long cents = salary%100;
+
+            return dollars + " dollar(s) " + cents + " cent(s)";
+
+        }
+
+        public String getDate() {
+            Calendar calendar = Calendar.getInstance();
+            calendar.setTime(period);
+            String month = calendar.getDisplayName(Calendar.MONTH, Calendar.LONG, Locale.ENGLISH);
+            String cap = month.substring(0, 1).toUpperCase() + month.substring(1);
+
+            return cap + "-" + calendar.get(Calendar.YEAR);
+        }
+
+        public long getId() {
+            return id;
+        }
+
+        public void setId(long id) {
+            this.id = id;
+        }
+
+        public String getEmployee() {
+            return employee;
+        }
+
+        public void setEmployee(String employee) {
+            this.employee = employee;
+        }
+
+        public Date getPeriod() {
+            return period;
+        }
+
+        public void setPeriod(Date period) {
+            this.period = period;
+        }
+
+        public Long getSalary() {
+            return salary;
+        }
+
+        public void setSalary(Long salary) {
+            this.salary = salary;
+        }
+
+        public User getUser() {
+            return user;
+        }
+
+        public void setUser(User user) {
+            this.user = user;
+        }
+    }
+  learner_created: false
+- name: src/account/Service/PaymentService.java
+  visible: true
+  text: |
+    package account.Service;
+
+
+    import account.Model.Payment;
+    import account.Model.User;
+    import account.Repository.PaymentRepository;
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.http.HttpStatus;
+    import org.springframework.security.core.annotation.AuthenticationPrincipal;
+    import org.springframework.stereotype.Service;
+    import org.springframework.web.server.ResponseStatusException;
+
+    import javax.transaction.Transactional;
+    import javax.validation.Valid;
+    import java.text.DateFormat;
+    import java.text.ParseException;
+    import java.text.SimpleDateFormat;
+    import java.time.LocalDate;
+    import java.util.Calendar;
+    import java.util.Date;
+    import java.util.List;
+
+    @Service
+    public class PaymentService {
+
+        @Autowired
+        UserService userService;
+
+        @Autowired
+        PaymentRepository paymentRepository;
+
+        @Transactional
+        public String addPayment(List<Payment> payments)  {
+
+            payments.forEach(payment -> {
+                Long salary = payment.getSalary();
+
+                if (salary < 1) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid salary " + salary);
+
+                String employeeMail = payment.getEmployee();
+                Date period = payment.getPeriod();
+
+                User employee = (User) userService.loadUserByUsername(employeeMail);
+                checkIfPeriodEmployeePairIsUnique(employeeMail, period);
+
+                payment.setUser(employee);
+                paymentRepository.save(payment);
+            });
+
+            return "{ \n \"status\": \"Added successfully!\"\n } ";
+        }
+
+
+        public void checkIfPeriodEmployeePairIsUnique(String employee, Date period) {
+            Payment payment = findPaymentByEmployeeAndPeriod(employee, period);
+
+            if (payment != null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payment for employee " + employee + " for period " + "exist! ");
+            }
+        }
+
+        public Payment findPaymentByEmployeeAndPeriod(String employee, Date period) {
+
+            //        if (payment == null) {
+    //            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payment for employee " + employee +  " period " + period + " not found");
+    //        }
+
+            return paymentRepository.findPaymentByEmployeeAndPeriod(employee, period);
+
+        }
+
+        public void checkIfPaymentExist(String employee, Date period) {
+            Payment payment = findPaymentByEmployeeAndPeriod(employee, period);
+
+            if (payment == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payment for employee " + employee +  " period " + period + " not found");
+            }
+        }
+
+        public String updatePayment(Payment updatedPayment) throws ParseException {
+            String employee = updatedPayment.getEmployee();
+            Date period = updatedPayment.getPeriod();
+            checkIfPaymentExist(employee, period);
+
+            Payment savedPayment = findPaymentByEmployeeAndPeriod(employee, period);
+            updatedPayment.setId(savedPayment.getId());
+            updatedPayment.setUser(savedPayment.getUser());
+            paymentRepository.save(updatedPayment);
+
+            return "{ \n \"status\": \"Updated successfully!\"\n } ";
+
+        }
+
+        public String getPayment(User user, String periodInString) throws ParseException {
+            if (periodInString == null) {
+                return getAllUsersPayments(user).toString();
+            }
+
+            Date period = convertStringToDate(periodInString);
+            checkIfPaymentExist(user.getEmail(), period);
+
+            return findPaymentByEmployeeAndPeriod(user.getEmail(), period).toString();
+
+
+
+        }
+
+        public List<Payment> getAllUsersPayments(User user) {
+            return paymentRepository.findPaymentByEmployeeOrderByPeriodDesc(user.getEmail());
+        }
+
+        public Date convertStringToDate(String stringDate) throws ParseException {
+            DateFormat dateFormat= new SimpleDateFormat("MM-yyyy");
+            return dateFormat.parse(stringDate);
+        }
+
+
+        public Date getDateFormat(String date) throws ParseException {
+            return new SimpleDateFormat("mm-yyyy").parse(date);
+        }
+
+
+
+
+
+
+
+
+    }
+  learner_created: false
+- name: src/account/Repository/PaymentRepository.java
+  visible: true
+  text: |
+    package account.Repository;
+
+    import account.Model.Payment;
+    import account.Service.UserService;
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.data.repository.CrudRepository;
+    import org.springframework.stereotype.Repository;
+
+    import java.util.Date;
+    import java.util.List;
+
+    @Repository
+    public interface PaymentRepository extends CrudRepository<Payment, Long> {
+
+        Payment findPaymentByEmployeeAndPeriod(String employee, Date period);
+        List<Payment> findPaymentByEmployeeOrderByPeriodDesc(String employee);
+
+    }
+  learner_created: false
+- name: src/account/Controller/PaymentController.java
+  visible: true
+  text: |
+    package account.Controller;
+
+    import account.Model.Payment;
+    import account.Model.User;
+    import account.Service.PaymentService;
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.security.core.context.SecurityContextHolder;
+    import org.springframework.web.bind.annotation.*;
+
+    import javax.validation.Valid;
+    import java.text.DateFormat;
+    import java.text.ParseException;
+    import java.util.Date;
+    import java.util.List;
+
+    @RestController
+    public class PaymentController {
+
+        @Autowired
+        PaymentService paymentService;
+
+        @PostMapping("api/acct/payments")
+        public String addPayment(@Valid @RequestBody List<Payment> payments) {
+
+
+            return paymentService.addPayment(payments);
+        }
+
+        @PutMapping("/api/acct/payments")
+        public String updatePayment(@Valid @RequestBody Payment updatedPayment) throws ParseException {
+            return paymentService.updatePayment(updatedPayment);
+        }
+
+        @GetMapping("/api/empl/payment")
+        public String getPayment(@RequestParam(required = false) String period) throws ParseException {
+            User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+
+            return paymentService.getPayment(user, period);
+        }
+
+    }
+  learner_created: false
+- name: src/account/CustomDateDeserializer.java
+  visible: true
+  text: |
+    package account;
+
+    import com.fasterxml.jackson.core.JsonParser;
+    import com.fasterxml.jackson.core.JsonProcessingException;
+    import com.fasterxml.jackson.databind.DeserializationContext;
+    import com.fasterxml.jackson.databind.JavaType;
+    import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
+    import org.springframework.http.HttpStatus;
+    import org.springframework.web.server.ResponseStatusException;
+
+    import java.io.IOException;
+    import java.text.ParseException;
+    import java.text.SimpleDateFormat;
+    import java.util.Date;
+
+    public class CustomDateDeserializer extends StdDeserializer<Date> {
+        private SimpleDateFormat formatter =
+                new SimpleDateFormat("MM-yyyy");
+
+        protected CustomDateDeserializer() {
+            this((Class<?>) null);
+        }
+
+        protected CustomDateDeserializer(Class<?> vc) {
+            super(vc);
+        }
+
+        @Override
+        public Date deserialize(JsonParser p, DeserializationContext ctxt) throws IOException, JsonProcessingException {
+            String date = p.getText();
+            String strPattern = "^((0[1-9]|1[012])-\\d{4}$)";
+
+            if (!date.matches(strPattern)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Wrong date " + date);
+            }
+
+
+            try {
+                return formatter.parse(date);
+            } catch (ParseException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+  learner_created: false
+- name: src/account/Repository/DataLoader.java
+  visible: true
+  text: |
+    package account.Repository;
+
+    import account.Model.Group;
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.stereotype.Component;
+
+    @Component
+    public class DataLoader {
+
+        @Autowired
+        private final GroupRepository groupRepository;
+
+        @Autowired
+        public DataLoader(GroupRepository groupRepository) {
+            this.groupRepository = groupRepository;
+            createRoles();
+        }
+
+        private void createRoles() {
+
+            try {
+                groupRepository.save(new Group("ROLE_ADMINISTRATOR"));
+                groupRepository.save(new Group("ROLE_USER"));
+                groupRepository.save(new Group("ROLE_ACCOUNTANT"));
+            } catch (Exception e) {
+
+            }
+
+        }
+    }
+  learner_created: false
+- name: src/account/Repository/GroupRepository.java
+  visible: true
+  text: |
+    package account.Repository;
+
+    import account.Model.Group;
+    import org.springframework.data.repository.CrudRepository;
+
+    public interface GroupRepository extends CrudRepository<Group, Long> {
+
+        Group findGroupByName(String name);
+    }
+  learner_created: false
+- name: src/account/Model/Group.java
+  visible: true
+  text: |
+    package account.Model;
+
+
+    import account.Controller.CustomUserSetSerializer;
+    import com.fasterxml.jackson.annotation.JsonBackReference;
+    import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+    import lombok.*;
+
+    import javax.persistence.*;
+    import java.util.Set;
+
+    @Entity(name = "Groups")
+    public class Group {
+
+        @Id
+        @GeneratedValue(strategy = GenerationType.IDENTITY)
+        private Long id;
+
+        @Column(unique = true, nullable = false)
+        private String name;
+
+        @ManyToMany(mappedBy = "userGroups")
+        @JsonSerialize(using = CustomUserSetSerializer.class)
+        private Set<User> users;
+
+
+        public Group(String name) {
+            this.name = name;
+        }
+
+        public Group() {
+
+        }
+
+        public Long getId() {
+            return id;
+        }
+
+        public void setId(Long id) {
+            this.id = id;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public Set<User> getUser() {
+            return users;
+        }
+
+        public void setUser(Set<User> users) {
+            this.users = users;
+        }
+    }
+  learner_created: false
+- name: src/account/Model/BreachedPasswords.java
+  visible: true
+  text: |
+    package account.Model;
+
+    import java.util.Arrays;
+    import java.util.List;
+
+    public class BreachedPasswords {
+
+        List<String> breachedPasswords;
+        public BreachedPasswords() {
+             this.breachedPasswords = Arrays.asList("PasswordForJanuary", "PasswordForFebruary", "PasswordForMarch", "PasswordForApril",
+                    "PasswordForMay", "PasswordForJune", "PasswordForJuly", "PasswordForAugust",
+                    "PasswordForSeptember", "PasswordForOctober", "PasswordForNovember", "PasswordForDecember");
+        }
+
+
+        public  boolean ifContainsBreachedPassword(String password) {
+            return this.breachedPasswords.contains(password);
+        }
+
+        public List<String> getBreachedPasswords() {
+            return breachedPasswords;
+        }
+    }
+  learner_created: false
+- name: src/account/CustomSetSerializer.java
+  visible: true
+  text: |
+    package account;
+
+    import account.Model.Group;
+    import com.fasterxml.jackson.core.JsonGenerator;
+    import com.fasterxml.jackson.databind.SerializerProvider;
+    import com.fasterxml.jackson.databind.ser.std.StdSerializer;
+
+    import java.io.IOException;
+    import java.util.ArrayList;
+    import java.util.List;
+    import java.util.Set;
+
+    public class CustomSetSerializer extends StdSerializer<Set<Group>> {
+
+
+        public CustomSetSerializer() {
+            this(null);
+        }
+
+        protected CustomSetSerializer(Class<Set<Group>> t) {
+            super(t);
+        }
+
+        @Override
+        public void serialize(Set<Group> value, JsonGenerator gen, SerializerProvider provider) throws IOException {
+
+            List<String> names = new ArrayList<>();
+            for (Group group : value) {
+                names.add(group.getName());
+            }
+            gen.writeObject(names);
+
+        }
+    }
+  learner_created: false
+- name: src/account/Controller/CustomUserSetSerializer.java
+  visible: true
+  text: |
+    package account.Controller;
+
+    import account.CustomSetSerializer;
+    import account.Model.Group;
+    import account.Model.User;
+    import com.fasterxml.jackson.core.JsonGenerator;
+    import com.fasterxml.jackson.databind.SerializerProvider;
+    import com.fasterxml.jackson.databind.ser.std.StdSerializer;
+
+    import java.io.IOException;
+    import java.util.ArrayList;
+    import java.util.List;
+    import java.util.Set;
+
+    public class CustomUserSetSerializer extends StdSerializer<Set<User>> {
+
+
+        public CustomUserSetSerializer() {
+            this(null);
+        }
+
+        protected CustomUserSetSerializer(Class<Set<User>> t) {
+            super(t);
+        }
+
+        @Override
+        public void serialize(Set<User> value, JsonGenerator gen, SerializerProvider provider) throws IOException {
+            List<Long> ids = new ArrayList<>();
+            for (User user : value) {
+                ids.add(user.getId());
+            }
+            gen.writeObject(ids);
+
+        }
+
+    }
+  learner_created: false
+- name: src/account/Controller/AdminController.java
+  visible: true
+  text: |
+    package account.Controller;
+
+
+    import account.Model.User;
+    import account.Service.UserService;
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.web.bind.annotation.GetMapping;
+    import org.springframework.web.bind.annotation.PutMapping;
+    import org.springframework.web.bind.annotation.RequestBody;
+    import org.springframework.web.bind.annotation.RestController;
+
+    import java.util.List;
+
+    @RestController
+    public class AdminController {
+
+        @Autowired
+        UserService userService;
+
+    //    @PutMapping("api/admin/user/role")
+    //    public User setRole(@RequestBody Map<String, String>) {
+    //
+    //
+    //    }
+
+
+        @GetMapping("api/admin/user")
+        public List<User> getAllUsersList() {
+            return userService.getAllUsersList();
+        }
+
+
+    }
+  learner_created: false
+- name: test/AccountServiceTest.java
+  visible: false
+  text: |
+    import account.AccountServiceApplication;
+    import org.hyperskill.hstest.dynamic.DynamicTest;
+    import org.hyperskill.hstest.dynamic.input.DynamicTesting;
+    import org.hyperskill.hstest.exception.outcomes.WrongAnswer;
+    import org.hyperskill.hstest.mocks.web.request.HttpRequest;
+    import org.hyperskill.hstest.stage.SpringTest;
+    import org.hyperskill.hstest.testcase.CheckResult;
+
+    import javax.net.ssl.*;
+    import java.security.cert.X509Certificate;
+
+    public class AccountServiceTest extends SpringTest {
+      public AccountServiceTest() {
+        super(AccountServiceApplication.class, "../service_db.mv.db");
+      }
+
+      SSLSocket socket;
+      java.security.cert.X509Certificate[] chain;
+
+      // Warning!!! Only for testing reason, trust all certificates!
+      TrustManager[] trustAllCerts = new TrustManager[] {
+              new X509TrustManager() {
+                public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+                  return new java.security.cert.X509Certificate[0];
+                }
+                public void checkClientTrusted(
+                        java.security.cert.X509Certificate[] certs, String authType) {
+                }
+                public void checkServerTrusted(
+                        java.security.cert.X509Certificate[] certs, String authType) {
+                }
+              }
+      };
+
+      // Test SSL
+      public CheckResult checkCertificateName(String nameCN) {
+        try {
+          SSLContext sc = SSLContext.getInstance("SSL");
+          //ТАК нельзя!!! доверяем всем сертификатам, только для тестирования и разработки!!!
+          sc.init(null, trustAllCerts, new java.security.SecureRandom());
+          SSLSocketFactory factory = sc.getSocketFactory();
+          HttpRequest request = get("");
+          socket = (SSLSocket) factory.createSocket(request.getHost(), request.getPort());
+          getCertificates();
+          if (findCert(nameCN)) {
+            return CheckResult.correct();
+          } else {
+            throw new WrongAnswer("Not found certificate with CN - " + nameCN);
+          }
+        } catch (Exception e) {
+          e.printStackTrace();
+          System.out.println("Connection not found");
+          throw new WrongAnswer("Can't establish https connection!");
+        }
+      }
+
+      // Get certificate chain
+      public void getCertificates() {
+        try {
+          chain = (X509Certificate[]) socket.getSession().getPeerCertificates();
+        } catch (SSLPeerUnverifiedException e) {
+          e.printStackTrace();
+          System.out.println(e.toString());
+        }
+      }
+
+
+      // Searching certificate by Common Name
+      public boolean findCert(String subject) {
+        for (java.security.cert.X509Certificate c : chain) {
+          String subjectName = c.getSubjectDN().getName();
+          System.out.println(subjectName + " " + c.getSigAlgName());
+          if (subjectName.contains("CN=" + subject)) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      @DynamicTest
+      DynamicTesting[] dt = new DynamicTesting[]{
+
+              // Check certificate name
+              () -> checkCertificateName("accountant_service"),
+      };
+    }
+  learner_created: false
+feedback_link: https://hyperskill.org/learn/step/16607#comment
+status: Unchecked
+record: -1

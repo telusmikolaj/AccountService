@@ -1,0 +1,13 @@
+
+t	java:S120"ZRename this package name to match the regular expression '^[a-z_]+(\.[a-z_][a-z0-9_]*)*$'.(À‘ìÑÿÿÿÿÿ
+Œ
+java:S1130O"qRemove the declaration of thrown exception 'java.text.ParseException', as it cannot be thrown from method's body.(Û’şúÿÿÿÿ
+w
+java:S1128
+"aRemove this unused import 'org.springframework.security.core.annotation.AuthenticationPrincipal'.(Øù¢
+N
+java:S1128"3Remove this unused import 'javax.validation.Valid'.(æ¤ñ÷úÿÿÿÿ
+K
+java:S1128"0Remove this unused import 'java.time.LocalDate'.(›‘¬èıÿÿÿÿ
+E
+java:S1128"/Remove this unused import 'java.util.Calendar'.(ÿÛö´

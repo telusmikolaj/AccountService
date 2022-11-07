@@ -1,0 +1,1963 @@
+type: edu
+files:
+- name: build.gradle
+  visible: true
+  text: |-
+    plugins {
+        id 'java'
+        id 'org.springframework.boot' version '2.3.1.RELEASE'
+        id 'io.spring.dependency-management' version '1.0.9.RELEASE'
+    }
+
+    repositories {
+        mavenCentral()
+    }
+
+    sourceSets.main.resources.srcDirs = ["src/resources"]
+
+    dependencies {
+        implementation 'org.springframework.boot:spring-boot-starter'
+        implementation 'org.springframework.boot:spring-boot-starter-actuator'
+        implementation 'org.springframework.boot:spring-boot-starter-web'
+        implementation group: 'org.hibernate', name: 'hibernate-validator', version: '6.1.0.Final'
+        implementation group: 'org.springframework.security', name: 'spring-security-config', version: '5.7.3'
+        implementation group: 'org.springframework.security', name: 'spring-security-web', version: '5.7.3'
+        implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+        implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+        implementation group: 'com.fasterxml.jackson.datatype', name: 'jackson-datatype-jsr310', version: '2.13.3'
+        implementation 'org.projectlombok:lombok:1.18.24'
+        runtimeOnly 'com.h2database:h2'
+        testImplementation('org.springframework.boot:spring-boot-starter-test') {
+            exclude group: 'org.junit.vintage', module: 'junit-vintage-engine'
+        }
+
+
+    }
+  learner_created: false
+- name: src/account/AccountServiceApplication.java
+  visible: true
+  text: |-
+    package account;
+
+    import org.springframework.boot.SpringApplication;
+    import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+    @SpringBootApplication
+    public class AccountServiceApplication {
+
+        public static void main(String[] args) {
+            SpringApplication.run(AccountServiceApplication.class, args);
+        }
+
+    }
+  learner_created: false
+- name: src/resources/application.properties
+  visible: true
+  text: |
+    server.port=28852
+    management.endpoints.web.exposure.include=*
+    management.endpoint.shutdown.enabled=true
+    spring.jackson.serialization.INDENT_OUTPUT=true
+    #datasource settings
+    spring.datasource.url=jdbc:h2:file:~/acc11
+    spring.datasource.driverClassName=org.h2.Driver
+    spring.datasource.username=sa
+    spring.datasource.password=abc123
+
+    #data settings
+    spring.jpa.database-platform=org.hibernate.dialect.H2Dialect
+    spring.jpa.hibernate.ddl-auto=update
+
+    #console settings
+    spring.h2.console.enabled=true
+    spring.h2.console.path=/h2
+    spring.h2.console.settings.trace=false
+    spring.jpa.show-sql=true
+    server.error.include-message = always
+
+    spring.jackson.date-format=MM/yyyy
+  learner_created: false
+- name: src/resources/static/index.html
+  visible: true
+  text: |-
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Title</title>
+        <h1>Welcome
+        </h1>
+    </head>
+    <body>
+
+    </body>
+    </html>
+  learner_created: false
+- name: src/account/SecurityConfig.java
+  visible: true
+  text: |
+    package account;
+
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.context.annotation.Bean;
+    import org.springframework.context.annotation.Configuration;
+    import org.springframework.http.HttpMethod;
+    import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
+    import org.springframework.security.config.annotation.authentication.builders.AuthenticationManagerBuilder;
+    import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+    import org.springframework.security.config.annotation.web.builders.WebSecurity;
+    import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+    import org.springframework.security.config.annotation.web.configuration.WebSecurityConfigurerAdapter;
+    import org.springframework.security.config.http.SessionCreationPolicy;
+    import org.springframework.security.core.userdetails.UserDetailsService;
+    import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+    import org.springframework.security.crypto.factory.PasswordEncoderFactories;
+    import org.springframework.security.crypto.password.PasswordEncoder;
+
+    import javax.sql.DataSource;
+
+    @Configuration
+    @EnableWebSecurity
+    public class SecurityConfig extends WebSecurityConfigurerAdapter {
+
+        @Autowired
+        RestAuthenticationEntryPoint restAuthenticationEntryPoint;
+
+        @Autowired
+        private UserDetailsService userDetailsService;
+
+
+        @Override
+        protected void configure(AuthenticationManagerBuilder auth) throws Exception {
+            auth.authenticationProvider(authenticationProvider());
+        }
+
+        @Override
+        protected void configure(HttpSecurity http) throws Exception {
+            http.authorizeRequests()
+                    .mvcMatchers("/api/acct/payments").anonymous()
+                    .mvcMatchers("/api/empl/payment").authenticated()
+                    .mvcMatchers("/api/auth/changepass").authenticated()
+                    .mvcMatchers("api/admin/user/role").hasRole("ROLE_ADMINISTRATOR")
+                    .anyRequest().permitAll() // make remaining endpoints public (including POST /register)
+                    .and()
+                    .csrf().disable() // disabling CSRF will allow sending POST request using Postman
+                    .httpBasic(); // enables basic auth.
+        }
+
+
+
+            @Bean
+            public BCryptPasswordEncoder passwordEncoder(){
+                return new BCryptPasswordEncoder();
+            }
+
+        @Bean
+        public DaoAuthenticationProvider authenticationProvider(){
+            DaoAuthenticationProvider provider = new DaoAuthenticationProvider();
+            provider.setPasswordEncoder(passwordEncoder());
+            provider.setUserDetailsService(userDetailsService);
+            return provider;
+        }
+
+        @Override
+        public void configure(WebSecurity web) throws Exception {
+            web
+                    .ignoring()
+                    .antMatchers("/h2/**");
+        }
+
+
+    }
+  learner_created: false
+- name: src/account/Service/UserService.java
+  visible: true
+  text: |
+    package account.Service;
+
+    import account.Model.BreachedPasswords;
+    import account.Model.Group;
+    import account.Model.User;
+    import account.Repository.GroupRepository;
+    import account.Repository.UserRepository;
+    import account.UserExistException;
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.http.HttpStatus;
+    import org.springframework.security.core.context.SecurityContextHolder;
+    import org.springframework.security.core.userdetails.UserDetails;
+    import org.springframework.security.core.userdetails.UserDetailsService;
+    import org.springframework.security.core.userdetails.UsernameNotFoundException;
+    import org.springframework.security.crypto.password.PasswordEncoder;
+    import org.springframework.stereotype.Service;
+    import org.springframework.web.server.ResponseStatusException;
+
+    import java.security.SecureRandom;
+    import java.util.Arrays;
+    import java.util.List;
+    import java.util.Locale;
+    import java.util.Optional;
+
+    @Service
+    public class UserService implements UserDetailsService {
+
+        @Autowired
+        GroupRepository groupRepository;
+        @Autowired
+        private UserRepository userRepository;
+
+        @Autowired
+        PasswordEncoder encoder;
+
+        @Override
+        public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+            UserDetails user = (UserDetails) userRepository.findByEmailIgnoreCase(username);
+
+            if (user == null){
+                throw new UsernameNotFoundException(username);
+
+            }
+            return user;
+        }
+
+
+        public User save (User user) {
+
+            checkIfUserEmailExist(user.getEmail());
+            checkPasswordLength(user.getPassword());
+            checkIfPasswordSafe(user.getPassword());
+
+            user.setEmail(user.getEmail().toLowerCase(Locale.ROOT));
+            user.setPassword(encoder.encode(user.getPassword()));
+            user.addUserGroups(selectGroupForUser());
+           return userRepository.save(user);
+        }
+
+
+        public void checkIfUserEmailExist(String email) {
+            if (userRepository.existsByEmail(email.toLowerCase(Locale.ROOT))) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "User exist!");
+            }
+        }
+
+        public void checkIfPasswordSafe(String password) {
+
+            BreachedPasswords breachedPasswords = new BreachedPasswords();
+            if (breachedPasswords.ifContainsBreachedPassword(password)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The password is in the hacker's database!");
+
+            }
+        }
+
+        public void checkPasswordLength(String password) {
+            if(password.length() < 12) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The password length must be at least 12 chars!");
+
+            }
+        }
+
+        public String changeUserPassword(String newPassword) {
+
+            User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+            String currentPassword = user.getPassword();
+
+            checkIfPasswordAreDiffrent(newPassword, currentPassword);
+            checkPasswordLength(newPassword);
+            checkIfPasswordSafe(newPassword);
+
+            user.setPassword(encoder.encode(newPassword));
+            userRepository.save(user);
+
+            return "{ \n" +
+                    "\"email\": " + "\"" + user.getEmail() + "\", \n" +
+                    "\"status\": " + "\"" + "The password has been updated successfully" +"\" \n" +
+                    "}";
+        }
+
+        public void checkIfPasswordAreDiffrent(String newPassword, String currentPassword) {
+            if (encoder.matches(newPassword, currentPassword)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "The passwords must be different!");
+            }
+        }
+
+        public Group selectGroupForUser() {
+            long numberOfUsers = userRepository.count();
+
+            if (numberOfUsers == 0) {
+                return groupRepository.findGroupByName("ROLE_ADMINISTRATOR");
+            }
+
+            return groupRepository.findGroupByName("ROLE_USER");
+
+        }
+
+        public List<User> getAllUsersList() {
+            return userRepository.findAll();
+        }
+
+
+
+
+
+
+
+    }
+  learner_created: false
+- name: src/account/UserExistException.java
+  visible: true
+  text: |
+    package account;
+
+    import org.springframework.http.HttpStatus;
+    import org.springframework.web.bind.annotation.ResponseStatus;
+
+    @ResponseStatus(code = HttpStatus.BAD_REQUEST, reason = "User not found")
+    public class UserExistException extends RuntimeException {
+    }
+  learner_created: false
+- name: src/account/Repository/UserRepository.java
+  visible: true
+  text: |
+    package account.Repository;
+
+    import account.Model.User;
+    import org.springframework.data.jpa.repository.JpaRepository;
+    import org.springframework.stereotype.Repository;
+
+    import java.util.Optional;
+
+    @Repository
+    public interface UserRepository extends JpaRepository<User, Long> {
+        User findByName(String username);
+        User findByEmailIgnoreCase(String email);
+        boolean existsByEmail(String email);
+
+
+
+    }
+  learner_created: false
+- name: src/EmailExistException.java
+  visible: true
+  text: |
+    import org.springframework.http.HttpStatus;
+    import org.springframework.web.bind.annotation.ResponseStatus;
+
+    @ResponseStatus(code = HttpStatus.INTERNAL_SERVER_ERROR, reason = "Email exisit")
+    public class EmailExistException extends RuntimeException {
+
+        public EmailExistException(String cause) {
+            super(cause);
+            System.out.println("there");
+
+        }
+    }
+  learner_created: false
+- name: src/account/Controller/AccountController.java
+  visible: true
+  text: |
+    package account.Controller;
+
+    import account.Model.Payment;
+    import account.Model.User;
+    import account.Repository.UserRepository;
+    import account.Service.UserService;
+    import com.fasterxml.jackson.core.JsonProcessingException;
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.http.HttpStatus;
+    import org.springframework.http.MediaType;
+    import org.springframework.http.ResponseEntity;
+    import org.springframework.security.core.context.SecurityContextHolder;
+    import org.springframework.security.core.userdetails.UserDetails;
+    import org.springframework.security.crypto.password.PasswordEncoder;
+    import org.springframework.stereotype.Controller;
+    import org.springframework.ui.ModelMap;
+    import org.springframework.web.bind.annotation.*;
+    import org.springframework.web.server.ResponseStatusException;
+
+    import javax.validation.Valid;
+    import javax.validation.constraints.NotNull;
+    import java.io.IOException;
+    import java.util.Arrays;
+    import java.util.List;
+    import java.util.Locale;
+    import java.util.Map;
+
+    @RestController
+    public class AccountController {
+
+        @Autowired
+        UserService userService;
+
+
+        @PostMapping("api/auth/signup")
+        public User signup(@Valid @RequestBody User user) throws IOException {
+
+            return userService.save(user);
+
+        }
+
+
+        @PostMapping("api/auth/changepass")
+        public String changePass(@RequestBody Map<String,String> newPasswordMap) {
+            String newPassword = newPasswordMap.get("new_password");
+
+            return userService.changeUserPassword(newPassword);
+
+        }
+    }
+  learner_created: false
+- name: src/account/Model/User.java
+  visible: true
+  text: |
+    package account.Model;
+
+    import account.Controller.CustomUserSetSerializer;
+    import account.CustomSetSerializer;
+    import com.fasterxml.jackson.annotation.JsonIgnore;
+    import com.fasterxml.jackson.annotation.JsonManagedReference;
+    import com.fasterxml.jackson.annotation.JsonProperty;
+    import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+    import lombok.*;
+
+
+    import javax.persistence.*;
+    import javax.validation.constraints.Email;
+    import javax.validation.constraints.NotBlank;
+    import java.util.HashSet;
+    import java.util.Set;
+
+    @Data
+    @AllArgsConstructor
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    @Entity(name = "Users")
+    public class User {
+
+        @Id
+        @GeneratedValue(strategy = GenerationType.AUTO)
+        private Long id;
+
+        @Column(name = "name")
+        @NotBlank
+        private String name;
+
+        @Column
+        @NotBlank
+        private String password;
+
+        @Column
+        @NotBlank
+        @Email(regexp = ".+@acme\\.com$")
+        private String email;
+
+        @Column
+        @NotBlank
+        private String lastname;
+
+
+        @ManyToMany(cascade = {
+                CascadeType.PERSIST,
+                CascadeType.MERGE
+        })
+
+        @JoinTable(name = "user_groups",
+                joinColumns = @JoinColumn(name = "user_id"),
+                inverseJoinColumns = @JoinColumn(name = "group_id"
+                ))
+        @JsonSerialize(using = CustomSetSerializer.class)
+        private Set<Group> userGroups = new HashSet<>();
+
+
+        public void addUserGroups(Group group) {
+            this.userGroups.add(group);
+        }
+
+    }
+  learner_created: false
+- name: src/account/RestAuthenticationEntryPoint.java
+  visible: true
+  text: |
+    package account;
+
+    import org.springframework.security.core.AuthenticationException;
+    import org.springframework.security.web.AuthenticationEntryPoint;
+    import org.springframework.stereotype.Component;
+
+    import javax.servlet.ServletException;
+    import javax.servlet.http.HttpServletRequest;
+    import javax.servlet.http.HttpServletResponse;
+    import java.io.IOException;
+
+
+    @Component
+    public class RestAuthenticationEntryPoint implements AuthenticationEntryPoint {
+        @Override
+        public void commence(HttpServletRequest request, HttpServletResponse response, AuthenticationException authException) throws IOException, ServletException {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, authException.getMessage());
+
+        }
+    }
+  learner_created: false
+- name: src/account/Model/Payment.java
+  visible: true
+  text: |
+    package account.Model;
+
+
+    import account.CustomDateDeserializer;
+    import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
+    import lombok.*;
+
+
+    import javax.persistence.*;
+    import javax.validation.constraints.NotBlank;
+    import java.util.Calendar;
+    import java.util.Date;
+    import java.util.Locale;
+
+
+    @Data
+    @AllArgsConstructor
+    @NoArgsConstructor
+    @Getter
+    @Setter
+    @Entity
+    @Table(name = "Payments")
+    public class Payment {
+
+        @Id
+        @GeneratedValue(strategy = GenerationType.IDENTITY)
+        private long id;
+
+        @Column(name = "employee")
+        @NotBlank
+        String employee;
+
+        @Column(name ="period")
+        @JsonDeserialize(using = CustomDateDeserializer.class)
+        Date period;
+
+        @Column(name = "salary")
+        Long salary;
+
+        @ManyToOne
+        @JoinColumn(name = "user_id", referencedColumnName = "id", nullable = false)
+        User user;
+
+        @Override
+        public String toString() {
+            return "{ \n " +
+                    "\"name\": " + "\"" + user.getName() + "\", \n" +
+                    "\"lastname\": " + "\"" + user.getLastname() + "\", \n" +
+                    "\"period\": " + "\"" + getDate() + "\", \n" +
+                    "\"salary\": " + "\"" + getSalaryInDollarCentsForm() + "\" \n" +
+                    "}";
+        }
+
+        public String getSalaryInDollarCentsForm() {
+            long dollars = salary/100;
+            long cents = salary%100;
+
+            return dollars + " dollar(s) " + cents + " cent(s)";
+
+        }
+
+        public String getDate() {
+            Calendar calendar = Calendar.getInstance();
+            calendar.setTime(period);
+            String month = calendar.getDisplayName(Calendar.MONTH, Calendar.LONG, Locale.ENGLISH);
+            String cap = month.substring(0, 1).toUpperCase() + month.substring(1);
+
+            return cap + "-" + calendar.get(Calendar.YEAR);
+        }
+
+        public long getId() {
+            return id;
+        }
+
+        public void setId(long id) {
+            this.id = id;
+        }
+
+        public String getEmployee() {
+            return employee;
+        }
+
+        public void setEmployee(String employee) {
+            this.employee = employee;
+        }
+
+        public Date getPeriod() {
+            return period;
+        }
+
+        public void setPeriod(Date period) {
+            this.period = period;
+        }
+
+        public Long getSalary() {
+            return salary;
+        }
+
+        public void setSalary(Long salary) {
+            this.salary = salary;
+        }
+
+        public User getUser() {
+            return user;
+        }
+
+        public void setUser(User user) {
+            this.user = user;
+        }
+    }
+  learner_created: false
+- name: src/account/Service/PaymentService.java
+  visible: true
+  text: |
+    package account.Service;
+
+
+    import account.Model.Payment;
+    import account.Model.User;
+    import account.Repository.PaymentRepository;
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.http.HttpStatus;
+    import org.springframework.security.core.annotation.AuthenticationPrincipal;
+    import org.springframework.stereotype.Service;
+    import org.springframework.web.server.ResponseStatusException;
+
+    import javax.transaction.Transactional;
+    import javax.validation.Valid;
+    import java.text.DateFormat;
+    import java.text.ParseException;
+    import java.text.SimpleDateFormat;
+    import java.time.LocalDate;
+    import java.util.Calendar;
+    import java.util.Date;
+    import java.util.List;
+
+    @Service
+    public class PaymentService {
+
+        @Autowired
+        UserService userService;
+
+        @Autowired
+        PaymentRepository paymentRepository;
+
+        @Transactional
+        public String addPayment(List<Payment> payments)  {
+
+            payments.forEach(payment -> {
+                Long salary = payment.getSalary();
+
+                if (salary < 1) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid salary " + salary);
+
+                String employeeMail = payment.getEmployee();
+                Date period = payment.getPeriod();
+
+                User employee = (User) userService.loadUserByUsername(employeeMail);
+                checkIfPeriodEmployeePairIsUnique(employeeMail, period);
+
+                payment.setUser(employee);
+                paymentRepository.save(payment);
+            });
+
+            return "{ \n \"status\": \"Added successfully!\"\n } ";
+        }
+
+
+        public void checkIfPeriodEmployeePairIsUnique(String employee, Date period) {
+            Payment payment = findPaymentByEmployeeAndPeriod(employee, period);
+
+            if (payment != null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payment for employee " + employee + " for period " + "exist! ");
+            }
+        }
+
+        public Payment findPaymentByEmployeeAndPeriod(String employee, Date period) {
+
+            //        if (payment == null) {
+    //            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payment for employee " + employee +  " period " + period + " not found");
+    //        }
+
+            return paymentRepository.findPaymentByEmployeeAndPeriod(employee, period);
+
+        }
+
+        public void checkIfPaymentExist(String employee, Date period) {
+            Payment payment = findPaymentByEmployeeAndPeriod(employee, period);
+
+            if (payment == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Payment for employee " + employee +  " period " + period + " not found");
+            }
+        }
+
+        public String updatePayment(Payment updatedPayment) throws ParseException {
+            String employee = updatedPayment.getEmployee();
+            Date period = updatedPayment.getPeriod();
+            checkIfPaymentExist(employee, period);
+
+            Payment savedPayment = findPaymentByEmployeeAndPeriod(employee, period);
+            updatedPayment.setId(savedPayment.getId());
+            updatedPayment.setUser(savedPayment.getUser());
+            paymentRepository.save(updatedPayment);
+
+            return "{ \n \"status\": \"Updated successfully!\"\n } ";
+
+        }
+
+        public String getPayment(User user, String periodInString) throws ParseException {
+            if (periodInString == null) {
+                return getAllUsersPayments(user).toString();
+            }
+
+            Date period = convertStringToDate(periodInString);
+            checkIfPaymentExist(user.getEmail(), period);
+
+            return findPaymentByEmployeeAndPeriod(user.getEmail(), period).toString();
+
+
+
+        }
+
+        public List<Payment> getAllUsersPayments(User user) {
+            return paymentRepository.findPaymentByEmployeeOrderByPeriodDesc(user.getEmail());
+        }
+
+        public Date convertStringToDate(String stringDate) throws ParseException {
+            DateFormat dateFormat= new SimpleDateFormat("MM-yyyy");
+            return dateFormat.parse(stringDate);
+        }
+
+
+        public Date getDateFormat(String date) throws ParseException {
+            return new SimpleDateFormat("mm-yyyy").parse(date);
+        }
+
+
+
+
+
+
+
+
+    }
+  learner_created: false
+- name: src/account/Repository/PaymentRepository.java
+  visible: true
+  text: |
+    package account.Repository;
+
+    import account.Model.Payment;
+    import account.Service.UserService;
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.data.repository.CrudRepository;
+    import org.springframework.stereotype.Repository;
+
+    import java.util.Date;
+    import java.util.List;
+
+    @Repository
+    public interface PaymentRepository extends CrudRepository<Payment, Long> {
+
+        Payment findPaymentByEmployeeAndPeriod(String employee, Date period);
+        List<Payment> findPaymentByEmployeeOrderByPeriodDesc(String employee);
+
+    }
+  learner_created: false
+- name: src/account/Controller/PaymentController.java
+  visible: true
+  text: |
+    package account.Controller;
+
+    import account.Model.Payment;
+    import account.Model.User;
+    import account.Service.PaymentService;
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.security.core.context.SecurityContextHolder;
+    import org.springframework.web.bind.annotation.*;
+
+    import javax.validation.Valid;
+    import java.text.DateFormat;
+    import java.text.ParseException;
+    import java.util.Date;
+    import java.util.List;
+
+    @RestController
+    public class PaymentController {
+
+        @Autowired
+        PaymentService paymentService;
+
+        @PostMapping("api/acct/payments")
+        public String addPayment(@Valid @RequestBody List<Payment> payments) {
+
+
+            return paymentService.addPayment(payments);
+        }
+
+        @PutMapping("/api/acct/payments")
+        public String updatePayment(@Valid @RequestBody Payment updatedPayment) throws ParseException {
+            return paymentService.updatePayment(updatedPayment);
+        }
+
+        @GetMapping("/api/empl/payment")
+        public String getPayment(@RequestParam(required = false) String period) throws ParseException {
+            User user = (User) SecurityContextHolder.getContext().getAuthentication().getPrincipal();
+
+            return paymentService.getPayment(user, period);
+        }
+
+    }
+  learner_created: false
+- name: src/account/CustomDateDeserializer.java
+  visible: true
+  text: |
+    package account;
+
+    import com.fasterxml.jackson.core.JsonParser;
+    import com.fasterxml.jackson.core.JsonProcessingException;
+    import com.fasterxml.jackson.databind.DeserializationContext;
+    import com.fasterxml.jackson.databind.JavaType;
+    import com.fasterxml.jackson.databind.deser.std.StdDeserializer;
+    import org.springframework.http.HttpStatus;
+    import org.springframework.web.server.ResponseStatusException;
+
+    import java.io.IOException;
+    import java.text.ParseException;
+    import java.text.SimpleDateFormat;
+    import java.util.Date;
+
+    public class CustomDateDeserializer extends StdDeserializer<Date> {
+        private SimpleDateFormat formatter =
+                new SimpleDateFormat("MM-yyyy");
+
+        protected CustomDateDeserializer() {
+            this((Class<?>) null);
+        }
+
+        protected CustomDateDeserializer(Class<?> vc) {
+            super(vc);
+        }
+
+        @Override
+        public Date deserialize(JsonParser p, DeserializationContext ctxt) throws IOException, JsonProcessingException {
+            String date = p.getText();
+            String strPattern = "^((0[1-9]|1[012])-\\d{4}$)";
+
+            if (!date.matches(strPattern)) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Wrong date " + date);
+            }
+
+
+            try {
+                return formatter.parse(date);
+            } catch (ParseException e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+  learner_created: false
+- name: src/account/Repository/DataLoader.java
+  visible: true
+  text: |
+    package account.Repository;
+
+    import account.Model.Group;
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.stereotype.Component;
+
+    @Component
+    public class DataLoader {
+
+        @Autowired
+        private final GroupRepository groupRepository;
+
+        @Autowired
+        public DataLoader(GroupRepository groupRepository) {
+            this.groupRepository = groupRepository;
+            createRoles();
+        }
+
+        private void createRoles() {
+
+            try {
+                groupRepository.save(new Group("ROLE_ADMINISTRATOR"));
+                groupRepository.save(new Group("ROLE_USER"));
+                groupRepository.save(new Group("ROLE_ACCOUNTANT"));
+            } catch (Exception e) {
+
+            }
+
+        }
+    }
+  learner_created: false
+- name: src/account/Repository/GroupRepository.java
+  visible: true
+  text: |
+    package account.Repository;
+
+    import account.Model.Group;
+    import org.springframework.data.repository.CrudRepository;
+
+    public interface GroupRepository extends CrudRepository<Group, Long> {
+
+        Group findGroupByName(String name);
+    }
+  learner_created: false
+- name: src/account/Model/Group.java
+  visible: true
+  text: |
+    package account.Model;
+
+
+    import account.Controller.CustomUserSetSerializer;
+    import com.fasterxml.jackson.annotation.JsonBackReference;
+    import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+    import lombok.*;
+
+    import javax.persistence.*;
+    import java.util.Set;
+
+    @Entity(name = "Groups")
+    public class Group {
+
+        @Id
+        @GeneratedValue(strategy = GenerationType.IDENTITY)
+        private Long id;
+
+        @Column(unique = true, nullable = false)
+        private String name;
+
+        @ManyToMany(mappedBy = "userGroups")
+        @JsonSerialize(using = CustomUserSetSerializer.class)
+        private Set<User> users;
+
+
+        public Group(String name) {
+            this.name = name;
+        }
+
+        public Group() {
+
+        }
+
+        public Long getId() {
+            return id;
+        }
+
+        public void setId(Long id) {
+            this.id = id;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public void setName(String name) {
+            this.name = name;
+        }
+
+        public Set<User> getUser() {
+            return users;
+        }
+
+        public void setUser(Set<User> users) {
+            this.users = users;
+        }
+    }
+  learner_created: false
+- name: src/account/Model/BreachedPasswords.java
+  visible: true
+  text: |
+    package account.Model;
+
+    import java.util.Arrays;
+    import java.util.List;
+
+    public class BreachedPasswords {
+
+        List<String> breachedPasswords;
+        public BreachedPasswords() {
+             this.breachedPasswords = Arrays.asList("PasswordForJanuary", "PasswordForFebruary", "PasswordForMarch", "PasswordForApril",
+                    "PasswordForMay", "PasswordForJune", "PasswordForJuly", "PasswordForAugust",
+                    "PasswordForSeptember", "PasswordForOctober", "PasswordForNovember", "PasswordForDecember");
+        }
+
+
+        public  boolean ifContainsBreachedPassword(String password) {
+            return this.breachedPasswords.contains(password);
+        }
+
+        public List<String> getBreachedPasswords() {
+            return breachedPasswords;
+        }
+    }
+  learner_created: false
+- name: src/account/CustomSetSerializer.java
+  visible: true
+  text: |
+    package account;
+
+    import account.Model.Group;
+    import com.fasterxml.jackson.core.JsonGenerator;
+    import com.fasterxml.jackson.databind.SerializerProvider;
+    import com.fasterxml.jackson.databind.ser.std.StdSerializer;
+
+    import java.io.IOException;
+    import java.util.ArrayList;
+    import java.util.List;
+    import java.util.Set;
+
+    public class CustomSetSerializer extends StdSerializer<Set<Group>> {
+
+
+        public CustomSetSerializer() {
+            this(null);
+        }
+
+        protected CustomSetSerializer(Class<Set<Group>> t) {
+            super(t);
+        }
+
+        @Override
+        public void serialize(Set<Group> value, JsonGenerator gen, SerializerProvider provider) throws IOException {
+
+            List<String> names = new ArrayList<>();
+            for (Group group : value) {
+                names.add(group.getName());
+            }
+            gen.writeObject(names);
+
+        }
+    }
+  learner_created: false
+- name: src/account/Controller/CustomUserSetSerializer.java
+  visible: true
+  text: |
+    package account.Controller;
+
+    import account.CustomSetSerializer;
+    import account.Model.Group;
+    import account.Model.User;
+    import com.fasterxml.jackson.core.JsonGenerator;
+    import com.fasterxml.jackson.databind.SerializerProvider;
+    import com.fasterxml.jackson.databind.ser.std.StdSerializer;
+
+    import java.io.IOException;
+    import java.util.ArrayList;
+    import java.util.List;
+    import java.util.Set;
+
+    public class CustomUserSetSerializer extends StdSerializer<Set<User>> {
+
+
+        public CustomUserSetSerializer() {
+            this(null);
+        }
+
+        protected CustomUserSetSerializer(Class<Set<User>> t) {
+            super(t);
+        }
+
+        @Override
+        public void serialize(Set<User> value, JsonGenerator gen, SerializerProvider provider) throws IOException {
+            List<Long> ids = new ArrayList<>();
+            for (User user : value) {
+                ids.add(user.getId());
+            }
+            gen.writeObject(ids);
+
+        }
+
+    }
+  learner_created: false
+- name: src/account/Controller/AdminController.java
+  visible: true
+  text: |
+    package account.Controller;
+
+
+    import account.Model.User;
+    import account.Service.UserService;
+    import org.springframework.beans.factory.annotation.Autowired;
+    import org.springframework.web.bind.annotation.GetMapping;
+    import org.springframework.web.bind.annotation.PutMapping;
+    import org.springframework.web.bind.annotation.RequestBody;
+    import org.springframework.web.bind.annotation.RestController;
+
+    import java.util.List;
+
+    @RestController
+    public class AdminController {
+
+        @Autowired
+        UserService userService;
+
+    //    @PutMapping("api/admin/user/role")
+    //    public User setRole(@RequestBody Map<String, String>) {
+    //
+    //
+    //    }
+
+
+        @GetMapping("api/admin/user")
+        public List<User> getAllUsersList() {
+            return userService.getAllUsersList();
+        }
+
+
+    }
+  learner_created: false
+- name: test/AccountServiceTest.java
+  visible: false
+  text: |-
+    import account.AccountServiceApplication;
+    import com.fasterxml.jackson.annotation.JsonInclude;
+    import com.fasterxml.jackson.core.JsonProcessingException;
+    import com.fasterxml.jackson.databind.ObjectMapper;
+    import com.google.gson.JsonArray;
+    import com.google.gson.JsonElement;
+    import com.google.gson.JsonObject;
+    import com.google.gson.JsonParser;
+    import org.hyperskill.hstest.dynamic.DynamicTest;
+    import org.hyperskill.hstest.dynamic.input.DynamicTesting;
+    import org.hyperskill.hstest.exception.outcomes.UnexpectedError;
+    import org.hyperskill.hstest.exception.outcomes.WrongAnswer;
+    import org.hyperskill.hstest.mocks.web.request.HttpRequest;
+    import org.hyperskill.hstest.mocks.web.response.HttpResponse;
+    import org.hyperskill.hstest.stage.SpringTest;
+    import org.hyperskill.hstest.testcase.CheckResult;
+    import org.springframework.http.HttpStatus;
+
+    import java.util.*;
+    import java.util.stream.Collectors;
+
+    import static org.hyperskill.hstest.common.JsonUtils.getJson;
+    import static org.hyperskill.hstest.common.JsonUtils.getPrettyJson;
+    import static org.hyperskill.hstest.testing.expect.Expectation.expect;
+    import static org.hyperskill.hstest.testing.expect.json.JsonChecker.*;
+
+    class TestReq {
+
+      private Map<String, Object> properties = new LinkedHashMap<>();
+
+      // Deep copy
+      public TestReq(TestReq another) {
+        this.properties = another.properties.entrySet().stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+      }
+
+      public TestReq() {
+      }
+
+      public String toJson() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.setSerializationInclusion(JsonInclude.Include.NON_NULL);
+        try {
+          return mapper.writeValueAsString(this.properties);
+        } catch (JsonProcessingException e) {
+          System.out.println(e.getMessage());
+          return null;
+        }
+      }
+
+      public TestReq setProps(String key, Object value) {
+        properties.put(key, value);
+        return this;
+      }
+
+    }
+    public class AccountServiceTest extends SpringTest {
+
+      private  final String signUpApi = "/api/auth/signup";
+      private  final String changePassApi = "/api/auth/changepass";
+      private  final String getEmployeePaymentApi = "/api/empl/payment";
+      private final String postPaymentApi = "/api/acct/payments";
+      private final String putRoleApi = "/api/admin/user/role";
+      private final String putAccessApi = "/api/admin/user/access";
+      private final String adminApi = "/api/admin/user/";
+      private final String auditorApi = "/api/security/events/";
+
+      static String[] breachedPass= new String[]{"PasswordForJanuary", "PasswordForFebruary", "PasswordForMarch",
+              "PasswordForApril", "PasswordForMay", "PasswordForJune",
+              "PasswordForJuly", "PasswordForAugust", "PasswordForSeptember",
+              "PasswordForOctober", "PasswordForNovember", "PasswordForDecember"};
+
+      List<Integer> userIdList = new ArrayList<>();
+
+      private final TestReq ivanIvanov = new TestReq().setProps("name", "Ivan")
+              .setProps("lastname", "Ivanov")
+              .setProps("email", "IvanIvanov@acme.com")
+              .setProps("password", "rXoa4CvqpLxW");
+      private final TestReq petrPetrov = new TestReq().setProps("name", "Petr")
+              .setProps("lastname", "Petrov")
+              .setProps("email", "PetrPetrov@acme.com")
+              .setProps("password", "nWza98hjkLPE");
+      private final TestReq johnDoe = new TestReq().setProps("name", "John")
+              .setProps("lastname", "Doe")
+              .setProps("email", "JohnDoe@acme.com")
+              .setProps("password", "oMoa3VvqnLxW");
+      private final TestReq maxMus = new TestReq().setProps("name", "Max")
+              .setProps("lastname", "Mustermann")
+              .setProps("email", "MaxMustermann@acme.com")
+              .setProps("password", "ai0y9bMvyF6G");
+      private final TestReq captainNemo = new TestReq().setProps("name", "Captain")
+              .setProps("lastname", "Nemo")
+              .setProps("email", "nautilus@pompilius.com")
+              .setProps("password", "wings");
+
+      private final String ivanIvanovCorrectUser = ivanIvanov.toJson();
+      private final String petrPetrovCorrectUser = petrPetrov.toJson();
+      private final String jDCorrectUser = johnDoe.toJson();
+      private final String maxMusCorrectUser = maxMus.toJson();
+      private final String maxMusLower = new TestReq(maxMus).setProps("email", "maxmustermann@acme.com").toJson();
+      private final String maxMusWrongPassword = new TestReq(maxMus).setProps("password", "none").toJson();
+      private final String petrPetrovWrongPassword = new TestReq(petrPetrov).setProps("password", "none").toJson();
+      private final String maxMusWrongEmail = new TestReq(maxMus).setProps("email", "maxmustermann@google.com").toJson();
+      private final String captainNemoWrongUser = captainNemo.toJson();
+      private final String jDNewPass = new TestReq(johnDoe).setProps("password", "aNob5VvqzRtb").toJson();
+      private final String jDPass = new TestReq().setProps("new_password", "aNob5VvqzRtb").toJson();
+
+      private final String firstResponseAdminApi = convert(new String[]{
+              new TestReq().setProps("id", 1).setProps("name", "John").setProps("lastname", "Doe")
+                      .setProps("email", "johndoe@acme.com").setProps("roles", new String[] {"ROLE_ADMINISTRATOR"}).toJson(),
+              new TestReq().setProps("id", 2).setProps("name", "Ivan").setProps("lastname", "Ivanov")
+                      .setProps("email", "ivanivanov@acme.com")
+                      .setProps("roles", new String[] {"ROLE_AUDITOR", "ROLE_USER"}).toJson(),
+              new TestReq().setProps("id", 3).setProps("name", "Max").setProps("lastname", "Mustermann")
+                      .setProps("email", "maxmustermann@acme.com").setProps("roles", new String[] {"ROLE_USER"}).toJson()
+      });
+      private final String secondResponseAdminApi = convert(new String[]{
+              new TestReq().setProps("id", 1).setProps("name", "John").setProps("lastname", "Doe")
+                      .setProps("email", "johndoe@acme.com").setProps("roles", new String[] {"ROLE_ADMINISTRATOR"}).toJson(),
+              new TestReq().setProps("id", 2).setProps("name", "Ivan").setProps("lastname", "Ivanov")
+                      .setProps("email", "ivanivanov@acme.com")
+                      .setProps("roles", new String[] {"ROLE_AUDITOR", "ROLE_USER"}).toJson(),
+              new TestReq().setProps("id", 3).setProps("name", "Max").setProps("lastname", "Mustermann")
+                      .setProps("email", "maxmustermann@acme.com").setProps("roles", new String[] {"ROLE_USER"}).toJson(),
+              new TestReq().setProps("id", 5).setProps("name", "Petr").setProps("lastname", "Petrov")
+                      .setProps("email", "petrpetrov@acme.com").setProps("roles", new String[] {"ROLE_USER"}).toJson()
+      });
+
+      private String[] auditorResponseApi = new String[]{
+              new TestReq().setProps("action", "CREATE_USER").setProps("subject", "Anonymous")
+                      .setProps("object", "johndoe@acme.com").setProps("path", "/api/auth/signup").toJson(),
+              new TestReq().setProps("action", "CREATE_USER").setProps("subject", "Anonymous")
+                      .setProps("object", "ivanivanov@acme.com").setProps("path", "/api/auth/signup").toJson(),
+              new TestReq().setProps("action", "GRANT_ROLE").setProps("subject", "johndoe@acme.com")
+                      .setProps("object", "Grant role AUDITOR to ivanivanov@acme.com").setProps("path", "/api/admin/user/role").toJson(),
+              new TestReq().setProps("action", "CREATE_USER").setProps("subject", "Anonymous")
+                      .setProps("object", "maxmustermann@acme.com").setProps("path", "/api/auth/signup").toJson(),
+              new TestReq().setProps("action", "CREATE_USER").setProps("subject", "Anonymous")
+                      .setProps("object", "petrpetrov@acme.com").setProps("path", "/api/auth/signup").toJson(),
+              new TestReq().setProps("action", "LOGIN_FAILED").setProps("subject", "maxmustermann@acme.com")
+                      .setProps("object", "/api/empl/payment").setProps("path", "/api/empl/payment").toJson(),
+              new TestReq().setProps("action", "LOGIN_FAILED").setProps("subject", "maxmustermann@google.com")
+                      .setProps("object", "/api/empl/payment").setProps("path", "/api/empl/payment").toJson(),
+              new TestReq().setProps("action", "LOGIN_FAILED").setProps("subject", "nautilus@pompilius.com")
+                      .setProps("object", "/api/empl/payment").setProps("path", "/api/empl/payment").toJson(),
+              new TestReq().setProps("action", "GRANT_ROLE").setProps("subject", "johndoe@acme.com")
+                      .setProps("object", "Grant role ACCOUNTANT to petrpetrov@acme.com").setProps("path", "/api/admin/user/role").toJson(),
+              new TestReq().setProps("action", "REMOVE_ROLE").setProps("subject", "johndoe@acme.com")
+                      .setProps("object", "Remove role ACCOUNTANT from petrpetrov@acme.com").setProps("path", "/api/admin/user/role").toJson(),
+              new TestReq().setProps("action", "DELETE_USER").setProps("subject", "johndoe@acme.com")
+                      .setProps("object", "petrpetrov@acme.com").setProps("path", "/api/admin/user").toJson(),
+              new TestReq().setProps("action", "CHANGE_PASSWORD").setProps("subject", "johndoe@acme.com")
+                      .setProps("object", "johndoe@acme.com").setProps("path", "/api/auth/changepass").toJson(),
+              new TestReq().setProps("action", "ACCESS_DENIED").setProps("subject", "ivanivanov@acme.com")
+                      .setProps("object", "/api/admin/user/role").setProps("path", "/api/admin/user/role").toJson(),
+              new TestReq().setProps("action", "ACCESS_DENIED").setProps("subject", "ivanivanov@acme.com")
+                      .setProps("object", "/api/admin/user").setProps("path", "/api/admin/user").toJson(),
+              new TestReq().setProps("action", "ACCESS_DENIED").setProps("subject", "ivanivanov@acme.com")
+                      .setProps("object", "/api/admin/user").setProps("path", "/api/admin/user").toJson(),
+              new TestReq().setProps("action", "ACCESS_DENIED").setProps("subject", "johndoe@acme.com")
+                      .setProps("object", "/api/acct/payments").setProps("path", "/api/acct/payments").toJson(),
+              new TestReq().setProps("action", "ACCESS_DENIED").setProps("subject", "maxmustermann@acme.com")
+                      .setProps("object", "/api/acct/payments").setProps("path", "/api/acct/payments").toJson(),
+              new TestReq().setProps("action", "ACCESS_DENIED").setProps("subject", "johndoe@acme.com")
+                      .setProps("object", "/api/empl/payment").setProps("path", "/api/empl/payment").toJson(),
+              new TestReq().setProps("action", "ACCESS_DENIED").setProps("subject", "johndoe@acme.com")
+                      .setProps("object", "/api/security/events").setProps("path", "/api/security/events").toJson(),
+              new TestReq().setProps("action", "LOGIN_FAILED").setProps("subject", "maxmustermann@acme.com")
+                      .setProps("object", "/api/empl/payment").setProps("path", "/api/empl/payment").toJson(),
+              new TestReq().setProps("action", "LOGIN_FAILED").setProps("subject", "maxmustermann@acme.com")
+                      .setProps("object", "/api/empl/payment").setProps("path", "/api/empl/payment").toJson(),
+              new TestReq().setProps("action", "LOGIN_FAILED").setProps("subject", "maxmustermann@acme.com")
+                      .setProps("object", "/api/empl/payment").setProps("path", "/api/empl/payment").toJson(),
+              new TestReq().setProps("action", "LOGIN_FAILED").setProps("subject", "maxmustermann@acme.com")
+                      .setProps("object", "/api/empl/payment").setProps("path", "/api/empl/payment").toJson(),
+              new TestReq().setProps("action", "LOGIN_FAILED").setProps("subject", "maxmustermann@acme.com")
+                      .setProps("object", "/api/empl/payment").setProps("path", "/api/empl/payment").toJson(),
+              new TestReq().setProps("action", "BRUTE_FORCE").setProps("subject", "maxmustermann@acme.com")
+                      .setProps("object", "/api/empl/payment").setProps("path", "/api/empl/payment").toJson(),
+              new TestReq().setProps("action", "LOCK_USER").setProps("subject", "maxmustermann@acme.com")
+                      .setProps("object", "Lock user maxmustermann@acme.com").setProps("path", "/api/admin/user/access").toJson(), // api !!!
+              new TestReq().setProps("action", "UNLOCK_USER").setProps("subject", "johndoe@acme.com")
+                      .setProps("object", "Unlock user maxmustermann@acme.com").setProps("path", "/api/admin/user/access").toJson(), // api !!!
+              new TestReq().setProps("action", "LOGIN_FAILED").setProps("subject", "maxmustermann@acme.com")
+                      .setProps("object", "/api/empl/payment").setProps("path", "/api/empl/payment").toJson(),
+              new TestReq().setProps("action", "LOGIN_FAILED").setProps("subject", "maxmustermann@acme.com")
+                      .setProps("object", "/api/empl/payment").setProps("path", "/api/empl/payment").toJson(),
+              new TestReq().setProps("action", "LOGIN_FAILED").setProps("subject", "maxmustermann@acme.com")
+                      .setProps("object", "/api/empl/payment").setProps("path", "/api/empl/payment").toJson(),
+              new TestReq().setProps("action", "LOGIN_FAILED").setProps("subject", "maxmustermann@acme.com")
+                      .setProps("object", "/api/empl/payment").setProps("path", "/api/empl/payment").toJson(),
+              new TestReq().setProps("action", "LOGIN_FAILED").setProps("subject", "maxmustermann@acme.com")
+                      .setProps("object", "/api/empl/payment").setProps("path", "/api/empl/payment").toJson(),
+              new TestReq().setProps("action", "UNLOCK_USER").setProps("subject", "johndoe@acme.com")
+                      .setProps("object", "Unlock user maxmustermann@acme.com").setProps("path", "/api/admin/user/access").toJson()
+      };
+
+      public AccountServiceTest() {
+        super(AccountServiceApplication.class, "../service_db.mv.db");
+      }
+
+      private String convert(String[] trs) {
+        JsonArray  jsonArray = new JsonArray();
+        for (String tr : trs) {
+          JsonElement jsonObject = JsonParser.parseString(tr);
+          jsonArray.add(jsonObject);
+        }
+        return jsonArray.toString();
+      }
+
+      CheckResult testApi(String user, String body, int status, String api, String method, String message) {
+
+        HttpResponse response = checkResponseStatus(user, body, status, api, method, message);
+
+
+        return CheckResult.correct();
+      }
+
+      /**
+       * Method for checking response on Post request for signup API
+       *
+       * @param body string representation of body content in JSON format (String)
+       * @param status required http status for response (int)
+       * @return instance of CheckResult class containing result of checks (CheckResult)
+       */
+      CheckResult testPostSignUpResponse(String body, int status, String[] role) {
+
+        HttpResponse response = checkResponseStatus(null, body, status, signUpApi, "POST", "");
+
+        JsonObject rightResponse = getJson(body).getAsJsonObject();
+        rightResponse.remove("password");
+
+        // Check is it JSON in response or something else
+        if (!response.getJson().isJsonObject()) {
+          return CheckResult.wrong("Wrong object in response, expected JSON but was \n" +
+                  response.getContent().getClass());
+
+        }
+
+        JsonObject jsonResponse = response.getJson().getAsJsonObject();
+
+        // Check if password is presence in response
+        if (jsonResponse.get("password") != null) {
+          return CheckResult.wrong("You must remove password from response\n" +
+                  jsonResponse);
+        }
+
+        if (jsonResponse.get("id") == null) {
+          return CheckResult.wrong("Response must contain user ID\n" +
+                  "Received response:\n" +
+                  jsonResponse);
+        }
+
+
+
+        // Check JSON in response
+        expect(response.getContent()).asJson().check(
+                isObject()
+                        .value("id", isInteger())
+                        .value("name", rightResponse.get("name").getAsString())
+                        .value("lastname", rightResponse.get("lastname").getAsString())
+                        .value("email", isString(s -> s.equalsIgnoreCase(rightResponse.get("email").getAsString())))
+                        .value("roles", role));
+
+        if (userIdList.contains(jsonResponse.get("id").getAsInt())) {
+          return CheckResult.wrong("User ID must be unique!\n" +
+                  "Received response:\n" +
+                  jsonResponse);
+        }
+
+        userIdList.add(jsonResponse.get("id").getAsInt());
+        return CheckResult.correct();
+      }
+
+      /**
+       * Method for restarting application
+       *
+       */
+      private CheckResult restartApplication() {
+        try {
+          reloadSpring();
+        } catch (Exception ex) {
+          throw new UnexpectedError(ex.getMessage());
+        }
+        return CheckResult.correct();
+      }
+
+      /**
+       * Method for checking authentication
+       *
+       * @param user string representation of user information in JSON format (String)
+       * @param status required http status for response (int)
+       * @param message hint about reason of error (String)
+       * @return instance of CheckResult class containing result of checks (CheckResult)
+       */
+      private CheckResult testUserRegistration(String user, int status, String message) {
+
+        HttpResponse response = checkResponseStatus(user, "", status, getEmployeePaymentApi, "GET", message);
+
+        return CheckResult.correct();
+      }
+
+      CheckResult testChangePassword(String api, String body, int status, String user) {
+        JsonObject userJson = getJson(user).getAsJsonObject();
+
+        HttpResponse response = checkResponseStatus(user, body, status, api, "POST", "");
+
+        // Check JSON in response
+        if (status == 200) {
+          expect(response.getContent()).asJson().check(
+                  isObject()
+                          .value("email", userJson.get("email").getAsString().toLowerCase())
+                          .value("status", "The password has been updated successfully"));
+        }
+        return CheckResult.correct();
+      }
+
+      private CheckResult testGetAdminApi(String api, int status, String user, String answer, String message) {
+
+        HttpResponse response = checkResponseStatus(user, "", status, api, "GET", message);
+
+        // Check JSON in response
+        if (response.getStatusCode() == 200) {
+          // Check is it array of JSON in response or something else
+          if (!response.getJson().isJsonArray()) {
+            return CheckResult.wrong("Wrong object in response, expected array of JSON but was \n" +
+                    response.getContent().getClass());
+          }
+          JsonArray correctJson = getJson(answer).getAsJsonArray();
+          JsonArray responseJson = getJson(response.getContent()).getAsJsonArray();
+
+          if (responseJson.size() == 0)  {
+            return CheckResult.wrong("No data in response body" + "\n"
+                    + "in response " + getPrettyJson(responseJson)  + "\n"
+                    + "must be " + getPrettyJson(correctJson));
+          }
+
+          if (responseJson.size() != correctJson.size())  {
+            return CheckResult.wrong("No data in response body" + "\n"
+                    + "in response " + getPrettyJson(responseJson)  + "\n"
+                    + "must be " + getPrettyJson(correctJson));
+          }
+
+          for (int i = 0; i < responseJson.size(); i++) {
+
+            String[] roles = new String[correctJson.get(i).getAsJsonObject().getAsJsonArray("roles").size()];
+            for(int j=0; j<correctJson.get(i).getAsJsonObject().getAsJsonArray("roles").size(); j++) {
+              roles[j]=correctJson.get(i).getAsJsonObject().getAsJsonArray("roles").get(j).getAsString();
+            }
+
+            expect(responseJson.get(i).getAsJsonObject().toString()).asJson()
+                    .check(isObject()
+                            .value("id", isInteger())
+                            .value("name", correctJson.get(i).getAsJsonObject().get("name").getAsString())
+                            .value("lastname", correctJson.get(i).getAsJsonObject().get("lastname").getAsString())
+                            .value("email", correctJson.get(i).getAsJsonObject().get("email").getAsString())
+                            .value("roles", isArray( roles )));
+          }
+        }
+        return CheckResult.correct();
+      }
+
+      CheckResult testPutAdminApi(String api, HttpStatus status, String user, String reqUser,
+                                  String role, String operation, String[] respRoles, String message) {
+
+        JsonObject jsonUser = getJson(reqUser).getAsJsonObject();
+        JsonObject request = new JsonObject();
+        request.addProperty("user", jsonUser.get("email").getAsString());
+        request.addProperty("operation", operation);
+        request.addProperty("role", role);
+
+        HttpResponse response = checkResponseStatus(user, request.toString(), status.value(), api, "PUT", message);
+
+        // Check JSON in response
+        if (response.getStatusCode() == 200) {
+          expect(response.getContent()).asJson()
+                  .check(isObject()
+                          .value("id", isInteger())
+                          .value("name", jsonUser.get("name").getAsString())
+                          .value("lastname", jsonUser.get("lastname").getAsString())
+                          .value("email", jsonUser.get("email").getAsString().toLowerCase())
+                          .value("roles", isArray(respRoles)));
+        }
+
+        if (response.getStatusCode() != 200) {
+          expect(response.getContent()).asJson().check(
+                  isObject()
+                          .value("error", status.getReasonPhrase())
+                          .value("path", api)
+                          .value("status", status.value())
+                          .value("message", respRoles[0])
+                          .anyOtherValues());
+        }
+        return CheckResult.correct();
+      }
+
+      CheckResult testPutAccessApi(String api, HttpStatus status, String user, String reqUser,
+                                   String operation, String answer, String message) {
+
+        JsonObject jsonUser = getJson(reqUser).getAsJsonObject();
+        JsonObject request = new JsonObject();
+        request.addProperty("user", jsonUser.get("email").getAsString());
+        request.addProperty("operation", operation);
+
+        HttpResponse response = checkResponseStatus(user, request.toString(), status.value(), api, "PUT", message);
+
+        // Check JSON in response
+
+        if (response.getStatusCode() == 200) {
+          expect(response.getContent()).asJson()
+                  .check(isObject()
+                          .value("status", answer));
+        } else {
+          expect(response.getContent()).asJson()
+                  .check(isObject()
+                          .value("error", status.getReasonPhrase())
+                          .value("path", api)
+                          .value("status", status.value())
+                          .value("message", answer)
+                          .anyOtherValues());
+        }
+
+
+        return CheckResult.correct();
+      }
+
+      CheckResult testLocking(String api, HttpStatus status, String user, String answer, String message) {
+
+        HttpResponse response = checkResponseStatus(user, "", status.value(), api, "GET", message);
+
+        // Check JSON in response
+        if (response.getStatusCode() != 200) {
+          expect(response.getContent()).asJson().check(
+                  isObject()
+                          .value("error", status.getReasonPhrase())
+                          .value("path", api)
+                          .value("status", status.value())
+                          .value("message", answer)
+                          .anyOtherValues());
+        }
+        return CheckResult.correct();
+      }
+
+      CheckResult testRoleModelNegative(String api, String method, HttpStatus status, String user, String body, String message) {
+
+        HttpResponse response = checkResponseStatus(user, body, status.value(), api, method.toUpperCase(), message);
+
+        // Check JSON in response
+        if (response.getStatusCode() != 200) {
+          expect(response.getContent()).asJson().check(
+                  isObject()
+                          .value("error", status.getReasonPhrase())
+                          .value("path", api)
+                          .value("status", status.value())
+                          .value("message", "Access Denied!")
+                          .anyOtherValues());
+        }
+        return CheckResult.correct();
+      }
+
+      private CheckResult testAuditorApi(String api, int status, String user, String answer,
+                                         int position, String message) {
+
+        HttpResponse response = checkResponseStatus(user, "", status, api, "GET", message);
+
+        // Check is it array of JSON in response or something else
+        if (!response.getJson().isJsonArray()) {
+          return CheckResult.wrong("Wrong object in response, expected array of JSON but was \n" +
+                  response.getContent().getClass());
+
+        }
+
+        JsonArray correctJson = getJson(answer).getAsJsonArray();
+        JsonArray responseJson = getJson(response.getContent()).getAsJsonArray();
+        if (responseJson.size() == 0) {
+          throw new WrongAnswer("Empty array in response!");
+        }
+
+        if (responseJson.size() != correctJson.size()) {
+          throw new WrongAnswer("Incorrect number - " +  responseJson.size() +
+                  " events in response, must be - " + correctJson.size() + "\n" +
+                  "response:\n" + getPrettyJson(responseJson)  + "\n" +
+                  "must be:\n " + getPrettyJson(correctJson));
+        }
+
+        // Check JSON in response
+        if (response.getStatusCode() == 200) {
+          expect(responseJson.get(position).toString()).asJson().check(
+                  isObject()
+                          .value("action", correctJson.get(position).getAsJsonObject().get("action").getAsString())
+                          .value("subject", correctJson.get(position).getAsJsonObject().get("subject").getAsString())
+                          .value("object", isString( o -> o.contains(correctJson.get(position).getAsJsonObject().get("object").getAsString())))
+                          .value("path", isString())
+                          .anyOtherValues());
+
+        }
+        return CheckResult.correct();
+      }
+
+      CheckResult testDeleteAdminApi(String api, HttpStatus status, String user, String param,
+                                     String answer, String message) {
+
+        HttpResponse response = checkResponseStatus(user, "", status.value(),
+                api + param, "DELETE", message);
+
+        // Check JSON in response
+        if (response.getStatusCode() == 200) {
+          expect(response.getContent()).asJson().check(
+                  isObject()
+                          .value("user", param.toLowerCase())
+                          .value("status", answer));
+        }
+
+        if (response.getStatusCode() != 200) {
+          expect(response.getContent()).asJson().check(
+                  isObject()
+                          .value("error", status.getReasonPhrase())
+                          .value("path", api + param)
+                          .value("status", status.value())
+                          .value("message", answer)
+                          .anyOtherValues());
+        }
+        return CheckResult.correct();
+      }
+
+
+      /**
+       * Method for testing api response
+       *
+       * @param user string representation of user information in JSON format (String)
+       * @param body request body (String)
+       * @param status expected response status (int)
+       * @param api testing api (String)
+       * @param method method for api (String)
+       * @param message test hints for student (String)
+       * @return response (HttpResponse)
+       */
+      private HttpResponse checkResponseStatus(String user, String body,
+                                               int status, String api, String method, String message) {
+        HttpRequest request = null;
+        switch (method) {
+          case "GET":
+            request = get(api);
+            break;
+          case "POST":
+            request = post(api, body);
+            break;
+          case "PUT":
+            request = put(api, body);
+            break;
+          case "DELETE":
+            request = delete(api);
+            break;
+        }
+
+        if (user != null) {
+          JsonObject userJson = getJson(user).getAsJsonObject();
+          String password = userJson.get("password").getAsString();
+          String login = userJson.get("email").getAsString().toLowerCase();
+          request = request.basicAuth(login, password);
+        }
+        HttpResponse response = request.send();
+
+        if (response.getStatusCode() != status) {
+          throw new WrongAnswer(method + " " + api  + " should respond with "
+                  + "status code " + status + ", responded: " + response.getStatusCode() + "\n"
+                  + message + "\n"
+                  + "Response body:\n" + response.getContent() + "\n");
+        }
+        return response;
+      }
+
+      private String getSub (String[] src, int position) {
+        return convert(Arrays.copyOfRange(src, 0, position));
+      }
+
+      @DynamicTest
+      DynamicTesting[] dt = new DynamicTesting[] {
+
+              // Create administrator and auditor
+              () -> testPostSignUpResponse(jDCorrectUser, 200, new String[] {"ROLE_ADMINISTRATOR"}), // 1
+              () -> testPostSignUpResponse(ivanIvanovCorrectUser, 200, new String[] {"ROLE_USER"}), // 2
+              () -> testPutAdminApi(putRoleApi, HttpStatus.OK, jDCorrectUser,
+                      ivanIvanovCorrectUser, "AUDITOR", "GRANT",
+                      new String[] {"ROLE_AUDITOR", "ROLE_USER"}, ""), // 3
+
+              // Testing user registration positive tests
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 3), 0,"'CREATE_USER' security event missing"), // 4
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 3), 1,"'CREATE_USER' security event missing"), // 5
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 3), 2,"'GRANT_ROLE' security event missing"), // 6
+              () -> testPostSignUpResponse(maxMusLower, 200, new String[] {"ROLE_USER"}), // 7
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 4), 3,"'CREATE_USER' security event missing"), // 8
+              () -> testPostSignUpResponse(petrPetrovCorrectUser, 200, new String[] {"ROLE_USER"}), // 9
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 5), 4,"'CREATE_USER' security event missing"), // 10
+
+    //
+    //          // Test authentication, positive tests
+              () -> testUserRegistration(maxMusLower, 200, "User must login!"), // 11
+              () -> testUserRegistration(maxMusCorrectUser, 200, "Login case insensitive!"), // 12
+    //
+    //          // Test authentication, negative tests
+              () -> testUserRegistration(maxMusWrongPassword, 401, "Wrong password!"), // 13
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 6), 5,"'LOGIN_FAILED' security event missing"), // 14
+              () -> testUserRegistration(maxMusWrongEmail, 401, "Wrong password!"), // 15
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 7), 6,"'LOGIN_FAILED' security event missing"), // 16
+              () -> testUserRegistration(captainNemoWrongUser, 401, "Wrong user"), // 17
+              () -> testApi(null, "", 401, getEmployeePaymentApi, "GET",
+                      "This api only for authenticated user"), // 18
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 8), 7,"'LOGIN_FAILED' security event missing"), // 19
+
+    //          // Testing persistence
+              () -> restartApplication(), // 20
+              () -> testUserRegistration(maxMusCorrectUser, 200, "User must login, after restarting!" +
+                      " Check persistence."), // 21
+
+              // Changing roles
+              () -> testPutAdminApi(putRoleApi, HttpStatus.BAD_REQUEST, jDCorrectUser,
+                      jDCorrectUser, "AUDITOR", "GRANT",
+                      new String[] {"The user cannot combine administrative and business roles!"},
+                      "Trying add administrative role to business user!"), // 22
+              () -> testPutAdminApi(putRoleApi, HttpStatus.OK, jDCorrectUser,
+                      petrPetrovCorrectUser, "ACCOUNTANT", "GRANT",
+                      new String[] {"ROLE_ACCOUNTANT", "ROLE_USER"}, "Trying to add role ACCOUNTANT to user"), // 23
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 9), 8,"'GRANT_ROLE' security event missing"), // 24
+              () -> testPutAdminApi(putRoleApi, HttpStatus.OK, jDCorrectUser,
+                      petrPetrovCorrectUser, "ACCOUNTANT", "REMOVE",
+                      new String[] {"ROLE_USER"}, "Trying to remove role ACCOUNTANT from user"), // 25
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 10), 9,"'REMOVE_ROLE' security event missing"), // 26
+
+              //Delete user
+              () -> testDeleteAdminApi("/api/admin/user/", HttpStatus.OK, jDCorrectUser,
+                      "petrpetrov@acme.com", "Deleted successfully!", "Trying to delete user"), // 27
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 11), 10,"'DELETE_USER' security event missing"), // 28
+
+              // Change password
+              () -> testChangePassword(changePassApi, jDPass, 200, jDCorrectUser), // 29
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 12), 11,"'CHANGE_PASSWORD' security event missing"), // 30
+
+              // Testing role model negative case
+              () -> testRoleModelNegative(putRoleApi, "PUT", HttpStatus.FORBIDDEN, ivanIvanovCorrectUser,
+                      "", "Trying to access administrative endpoint with business user"), // 31
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 13), 12,"'ACCESS_DENIED' security event missing"), // 32
+              () -> testRoleModelNegative(adminApi, "GET", HttpStatus.FORBIDDEN, ivanIvanovCorrectUser,
+                      "", "Trying to access administrative endpoint with business user"), // 33
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 14), 13,"'ACCESS_DENIED' security event missing"), // 34
+              () -> testRoleModelNegative(adminApi, "DELETE", HttpStatus.FORBIDDEN, ivanIvanovCorrectUser,
+                      "", "Trying to access administrative endpoint with business user"), // 35
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 15), 14,"'ACCESS_DENIED' security event missing"), // 36
+              () -> testRoleModelNegative(postPaymentApi, "POST", HttpStatus.FORBIDDEN, jDNewPass,
+                      "", "Trying to access business endpoint with administrative user"), // 37
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 16), 15,"'ACCESS_DENIED' security event missing"), // 38
+              () -> testRoleModelNegative(postPaymentApi, "POST", HttpStatus.FORBIDDEN, maxMusCorrectUser,
+                      "", "Trying to access endpoint with wrong role"), // 39
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 17), 16,"'ACCESS_DENIED' security event missing"), // 40
+              () -> testRoleModelNegative(getEmployeePaymentApi, "GET", HttpStatus.FORBIDDEN, jDNewPass,
+                      "", "Trying to access business endpoint with administrative user"), // 41
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 18), 17,"'ACCESS_DENIED' security event missing"), // 42
+
+              () -> testRoleModelNegative(auditorApi, "GET", HttpStatus.FORBIDDEN, jDNewPass,
+                      "", "Trying to access business endpoint with administrative user"), // 43
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 19), 18,"'ACCESS_DENIED' security event missing"), // 44
+
+              // Testing locking user
+              () -> testUserRegistration(maxMusWrongPassword, 401, "Wrong password!"), // 45
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 20), 19,"'LOGIN_FAILED' security event missing"), // 46
+              () -> testUserRegistration(maxMusWrongPassword, 401, "Wrong password!"), // 47
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 21), 20,"'LOGIN_FAILED' security event missing"), // 48
+              () -> testUserRegistration(maxMusWrongPassword, 401, "Wrong password!"), // 49
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 22), 21,"'LOGIN_FAILED' security event missing"), // 50
+              () -> testUserRegistration(maxMusWrongPassword, 401, "Wrong password!"), // 51
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 23), 22,"'LOGIN_FAILED' security event missing"), // 52
+              () -> testUserRegistration(maxMusWrongPassword, 401, "Wrong password!"), // 53
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 26), 23,"'LOGIN_FAILED' security event missing"), // 54
+              () -> testLocking(getEmployeePaymentApi, HttpStatus.UNAUTHORIZED, maxMusCorrectUser,
+                      "User account is locked", "User must be locked after 5 attempts with wrong password"), // 55
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 26), 24,"'BRUTE_FORCE' security event missing"), // 56
+              () -> testPutAccessApi(putAccessApi, HttpStatus.OK, jDNewPass,
+                      maxMusCorrectUser,"UNLOCK",
+                      "User maxmustermann@acme.com unlocked!", "User must be unlocked through admin endpoint"), // 57
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 27), 25,"'LOCK_USER' security event missing"), // 58
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 27), 26,"'UNLOCK_USER' security event missing"), // 59
+              () -> testUserRegistration(maxMusWrongPassword, 401, "Wrong password!"), // 60
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 28), 27,"'LOGIN_FAILED' security event missing"), // 61
+              () -> testUserRegistration(maxMusWrongPassword, 401, "Wrong password!"), // 62
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 29), 28,"'LOGIN_FAILED' security event missing"), // 63
+              () -> testUserRegistration(maxMusWrongPassword, 401, "Wrong password!"), // 64
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 30), 29,"'LOGIN_FAILED' security event missing"), // 65
+              () -> testUserRegistration(maxMusWrongPassword, 401, "Wrong password!"), // 66
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 31), 30,"'LOGIN_FAILED' security event missing"), // 67
+              () -> testUserRegistration(maxMusCorrectUser, 200, "User must login!"), // 68
+              () -> testUserRegistration(maxMusWrongPassword, 401, "Wrong password!"), // 69
+              () -> testUserRegistration(maxMusCorrectUser, 200,
+                      "Counter of failed login attempts must be reset after successfully login!"), // 70
+              () -> testPutAccessApi(putAccessApi, HttpStatus.OK, jDNewPass,
+                      maxMusCorrectUser,"LOCK",
+                      "User maxmustermann@acme.com locked!", ""), // 71
+              () -> testAuditorApi(auditorApi, 200, ivanIvanovCorrectUser,
+                      getSub(auditorResponseApi, 33), 31,"'LOCK_USER' security event missing"), // 72
+              () -> testLocking(getEmployeePaymentApi, HttpStatus.UNAUTHORIZED, maxMusCorrectUser,
+                      "User account is locked", "User must be locked through admin endpoint"), // 72
+              () -> testPutAccessApi(putAccessApi, HttpStatus.BAD_REQUEST, jDNewPass,
+                      jDCorrectUser,"LOCK",
+                      "Can't lock the ADMINISTRATOR!", ""),
+              () -> testGetAdminApi(adminApi, 200, jDNewPass,
+                      firstResponseAdminApi, "Api must be available to admin user"),
+
+              () -> testPostSignUpResponse(petrPetrovCorrectUser, 200, new String[] {"ROLE_USER"}),
+              () -> testUserRegistration(petrPetrovWrongPassword, 401, "Wrong password!"),
+              () -> testUserRegistration(petrPetrovWrongPassword, 401, "Wrong password!"),
+              () -> testUserRegistration(petrPetrovWrongPassword, 401, "Wrong password!"),
+              () -> testUserRegistration(petrPetrovWrongPassword, 401, "Wrong password!"),
+              () -> testUserRegistration(petrPetrovCorrectUser, 200,
+                      "User must be locked only after 5 attempts with wrong password"),
+              () -> testUserRegistration(petrPetrovWrongPassword, 401, "Wrong password!"),
+              () -> testUserRegistration(petrPetrovCorrectUser, 200,
+                      "In case of a successful login, reset the counter of the failed attempt."),
+              () -> testUserRegistration(petrPetrovWrongPassword, 401, "Wrong password!"),
+              () -> testUserRegistration(petrPetrovWrongPassword, 401, "Wrong password!"),
+              () -> testUserRegistration(petrPetrovWrongPassword, 401, "Wrong password!"),
+              () -> testUserRegistration(petrPetrovWrongPassword, 401, "Wrong password!"),
+              () -> testUserRegistration(petrPetrovWrongPassword, 401, "Wrong password!"),
+              () -> testLocking(getEmployeePaymentApi, HttpStatus.UNAUTHORIZED, petrPetrovCorrectUser,
+                      "User account is locked", "User must be locked after 5 attempts with wrong password!"),
+              () -> testGetAdminApi(adminApi, 401, jDCorrectUser,
+                      firstResponseAdminApi, "Wrong password for admin"),
+              () -> testGetAdminApi(adminApi, 401, jDCorrectUser,
+                      firstResponseAdminApi, "Wrong password for admin"),
+              () -> testGetAdminApi(adminApi, 401, jDCorrectUser,
+                      firstResponseAdminApi, "Wrong password for admin"),
+              () -> testGetAdminApi(adminApi, 401, jDCorrectUser,
+                      firstResponseAdminApi, "Wrong password for admin"),
+              () -> testGetAdminApi(adminApi, 401, jDCorrectUser,
+                      firstResponseAdminApi, "Wrong password for admin"),
+              () -> testGetAdminApi(adminApi, 200, jDNewPass,
+                      secondResponseAdminApi, "Api must be available to admin user")
+      };
+
+    }
+  learner_created: false
+- name: src/account/CustomAccessDeniedHandler.java
+  visible: true
+  text: |+
+    package account;
+
+    import com.fasterxml.jackson.databind.ObjectMapper;
+    import org.springframework.http.HttpStatus;
+    import org.springframework.security.access.AccessDeniedException;
+    import org.springframework.security.web.access.AccessDeniedHandler;
+
+    import javax.servlet.ServletException;
+    import javax.servlet.http.HttpServletRequest;
+    import javax.servlet.http.HttpServletResponse;
+    import java.io.IOException;
+    import java.util.Date;
+    import java.util.HashMap;
+    import java.util.Map;
+
+    public class CustomAccessDeniedHandler implements AccessDeniedHandler {
+        private ObjectMapper objectMapper = new ObjectMapper();
+
+        @Override
+        public void handle(
+                HttpServletRequest request,
+                HttpServletResponse response,
+                AccessDeniedException exception
+        ) throws IOException, ServletException {
+            HttpStatus httpStatus = HttpStatus.FORBIDDEN; // 403
+            String url = String.valueOf(request.getRequestURL());
+
+            Map<String, Object> data = new HashMap<>();
+            data.put(
+                    "timestamp",
+                    new Date()
+            );
+
+            data.put(
+                    "error",
+                    "Forbidden"
+            );
+
+            data.put(
+                    "code",
+                    httpStatus.value()
+            );
+            data.put(
+                    "status",
+                    403
+            );
+            data.put(
+                    "message",
+                    "Access Denied!"
+            );
+
+            data.put(
+                    "path",
+                    url.substring(22)
+            );
+
+            // setting the response HTTP status code
+            response.setStatus(httpStatus.value());
+
+            // serializing the response body in JSON
+            response
+                    .getOutputStream()
+                    .println(
+                            objectMapper.writeValueAsString(data)
+                    );
+        }
+    }
+
+
+
+  learner_created: true
+feedback_link: https://hyperskill.org/learn/step/16606#comment
+status: Unchecked
+record: -1
