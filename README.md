@@ -1,6 +1,5 @@
-# gShop Project
+# AccountService
 > JetBrains Academy project - web app allowing sending payrolls to the employee's account on the corporate website
-> Heroku Live demo [_here_](https://shop-front-build.herokuapp.com). <!-- If you have the project hosted somewhere, include the link here. -->
 
 ## Table of Contents
 * [General Info](#general-information)
@@ -24,14 +23,9 @@ Backend
 
 ## Features
 List the ready features here:
-- Adding product to shop
-- Selling products
-- Cart
-- Order history
-- Auctions
-- Login/Logout
-- Sending message to shop 
-- adding comments
+- adding employees payrolls
+- user authentication
+- password reset
 
 ## Project Status
 Project is: _in progress_.
